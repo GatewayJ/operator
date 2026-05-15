@@ -477,6 +477,8 @@ pub(super) async fn finalize_tenant_status(
     builder.set_pool_statuses(summary.pool_statuses);
     if let Some(tls_status) = tls_plan.status {
         builder.set_tls_status(tls_status);
+    } else {
+        builder.clear_tls_status();
     }
 
     let (event_condition, event_reason, event_type, event_message) = if summary.any_degraded {

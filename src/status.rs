@@ -244,6 +244,16 @@ impl StatusBuilder {
         }
     }
 
+    pub fn clear_tls_status(&mut self) {
+        self.next.certificates.tls = None;
+        self.set_condition(
+            ConditionType::TlsReady,
+            ConditionStatus::False,
+            Reason::TlsDisabled,
+            "TLS is disabled".to_string(),
+        );
+    }
+
     pub fn mark_started(&mut self) {
         self.set_condition(
             ConditionType::Ready,
@@ -643,6 +653,44 @@ mod tests {
         assert_eq!(status.current_state, "Blocked");
         assert!(status.condition(ConditionType::KmsReady).is_none());
         assert!(status.condition(ConditionType::WorkloadsReady).is_none());
+    }
+
+    #[test]
+    fn clear_tls_status_removes_stale_tls_status_and_condition() {
+        let mut tenant = crate::tests::create_test_tenant(None, None);
+        tenant.status = Some(Status {
+            current_state: "Ready".to_string(),
+            certificates: certificate::Status {
+                tls: Some(certificate::TlsCertificateStatus {
+                    mode: "certManager".to_string(),
+                    ready: true,
+                    managed_certificate: Some(true),
+                    mount_path: Some("/var/run/rustfs/tls".to_string()),
+                    last_error_reason: Some("CertManagerCertificateNotReady".to_string()),
+                    ..Default::default()
+                }),
+            },
+            conditions: vec![condition("TlsReady", "True", "TlsConfigured")],
+            ..Default::default()
+        });
+
+        let mut builder = StatusBuilder::from_tenant(&tenant);
+        builder.clear_tls_status();
+        let status = builder.build();
+
+        assert!(status.certificates.tls.is_none());
+        assert_eq!(
+            status
+                .condition(ConditionType::TlsReady)
+                .map(|condition| condition.status.as_str()),
+            Some("False")
+        );
+        assert_eq!(
+            status
+                .condition(ConditionType::TlsReady)
+                .map(|condition| condition.reason.as_str()),
+            Some("TlsDisabled")
+        );
     }
 
     #[test]
