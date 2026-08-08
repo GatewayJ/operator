@@ -73,6 +73,10 @@ Operator 提供以下能力：
 
 ## 4. 安装 Operator
 
+Operator STS 默认启用 TLS，但默认不自动生成证书。安装前，需要在 Operator namespace
+中预创建包含 `tls.crt`、`tls.key` 和 `ca.crt` 的 `sts-tls` Secret。Kind 等开发环境可通过
+`--set sts.tls.auto=true` 显式启用自动生成。
+
 使用仓库内 Helm Chart 安装：
 
 ```bash
@@ -296,7 +300,7 @@ sts:
     timeoutSeconds: 30
   tls:
     enabled: true
-    auto: true
+    auto: false
 ```
 
 配置说明：
@@ -305,8 +309,9 @@ sts:
 - 保持 `console.replicas=1`。Console 会话保存在进程内，Chart 使用 Recreate 升级策略，避免新旧 cookie 格式混跑；升级时现有会话会失效。自定义 Deployment 也必须保持这两个约束。
 - 从多 Console 副本的旧版本升级前，先把 `console.replicas` 调整为 `1`；升级会有短暂 Console 不可用，用户需要重新登录。回滚到不支持服务端会话的旧版本前，先把 Console Deployment 缩容到零，完成回滚后再恢复一个副本，避免两种 cookie 格式同时在线。
 - 生产环境应使用 HTTPS 并保持 `CONSOLE_COOKIE_SECURE` 启用。仅本地 HTTP 调试时才关闭。
-- `sts.tls.auto=true` 时，Operator 会创建或修复 `sts-tls`。自动生成的证书有效期为一年，并在到期前 30 天轮换。Operator 每五分钟检查一次 Secret，对新连接热加载有效变更；检查失败时继续使用最后一个有效配置。升级后，旧策略生成的 Operator 托管 Secret 会被替换一次，因此需要同步刷新客户端信任的 `ca.crt`。当 `rbac.create=true` 时，Chart 通过命名空间级 Role 隔离写权限，全集群 Secret 和 ConfigMap 权限保持只读。当 `rbac.create=false` 时，必须为 Operator ServiceAccount 自行提供等效的 Role 和 RoleBinding：允许在 Operator namespace 内 `create` Secret，并将 `get`、`update` 限定到名为 `sts-tls` 的资源。
-- `sts.tls.auto=false` 时，可通过替换 `sts-tls` 手动轮换外部签发证书；有效的新证书会在五分钟内热加载。请监控 `rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds` 和 `rustfs_operator_sts_tls_ca_expiry_timestamp_seconds`。
+- `sts.tls.auto=false` 是默认值。必须预创建包含外部签发的 `tls.crt`、`tls.key` 和 `ca.crt` 的 `sts-tls`，否则 Operator 会输出可执行的错误信息并启动失败。替换该 Secret 可手动轮换证书；有效的新证书会在五分钟内热加载，刷新失败时继续使用最后一个有效配置。
+- Kind 等开发环境需要显式设置 `sts.tls.auto=true`，由 Operator 管理自签 CA。自动生成的证书有效期为一年，并在到期前 30 天轮换。升级后，旧策略生成的 Operator 托管 Secret 会被替换一次，因此需要同步刷新客户端信任的 `ca.crt`。当 `rbac.create=true` 时，Chart 通过命名空间级 Role 隔离写权限，全集群 Secret 和 ConfigMap 权限保持只读。当 `rbac.create=false` 时，必须为 Operator ServiceAccount 自行提供等效的 Role 和 RoleBinding：允许在 Operator namespace 内 `create` Secret，并将 `get`、`update` 限定到名为 `sts-tls` 的资源。
+- 请监控 `rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds` 和 `rustfs_operator_sts_tls_ca_expiry_timestamp_seconds`。
 
 ## 6. 创建 Tenant
 

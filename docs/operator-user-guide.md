@@ -71,6 +71,11 @@ When a Tenant is applied, the operator creates and owns:
 
 ## 4. Install the Operator
 
+Operator STS TLS is enabled while automatic certificate generation is disabled by default.
+Before installing, pre-create `sts-tls` in the Operator namespace with `tls.crt`, `tls.key`, and
+`ca.crt`. For Kind and other development environments, explicitly opt in to generated
+certificates with `--set sts.tls.auto=true`.
+
 Install with the included Helm chart:
 
 ```bash
@@ -319,7 +324,7 @@ sts:
     timeoutSeconds: 30
   tls:
     enabled: true
-    auto: true
+    auto: false
 ```
 
 Notes:
@@ -328,8 +333,9 @@ Notes:
 - Keep `console.replicas=1`. Console sessions are stored in process, and the chart uses a Recreate rollout so upgrades invalidate existing sessions without mixing incompatible cookie formats. Custom deployments must preserve both constraints.
 - When upgrading from a release configured with multiple Console replicas, set `console.replicas=1` first; expect brief Console downtime and require users to sign in again. Before rolling back to a release without server-side sessions, scale the Console Deployment to zero, perform the rollback, then restore one replica so incompatible cookie formats never overlap.
 - Keep `CONSOLE_COOKIE_SECURE` enabled for production HTTPS. Only disable it for local HTTP testing.
-- `sts.tls.auto=true` lets the operator create or repair `sts-tls`. Generated certificates are valid for one year and rotate 30 days before expiry. The operator checks every five minutes and hot-loads valid changes for new connections while retaining the last valid configuration on errors. A legacy Operator-managed Secret is replaced once after upgrade, so refresh clients that trust its `ca.crt`. With `rbac.create=true`, the chart isolates write access in a namespaced Role while keeping cluster-wide Secret and ConfigMap access read-only. With `rbac.create=false`, provide an equivalent Role and RoleBinding for the operator ServiceAccount: namespaced Secret `create`, plus `get` and `update` restricted to the `sts-tls` resource name.
-- With `sts.tls.auto=false`, replace `sts-tls` to rotate an externally issued certificate manually; a valid replacement is hot-loaded within five minutes. Monitor `rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds` and `rustfs_operator_sts_tls_ca_expiry_timestamp_seconds`.
+- `sts.tls.auto=false` is the default. Pre-create `sts-tls` with externally issued `tls.crt`, `tls.key`, and `ca.crt`; otherwise startup fails with an actionable error. Replace that Secret to rotate the certificate manually. A valid replacement is hot-loaded within five minutes while refresh errors retain the last valid configuration.
+- Set `sts.tls.auto=true` explicitly for Kind or other development environments that should use an Operator-managed self-signed CA. Generated certificates are valid for one year and rotate 30 days before expiry. A legacy Operator-managed Secret is replaced once after upgrade, so refresh clients that trust its `ca.crt`. With `rbac.create=true`, the chart isolates write access in a namespaced Role while keeping cluster-wide Secret and ConfigMap access read-only. With `rbac.create=false`, provide an equivalent Role and RoleBinding for the Operator ServiceAccount: namespaced Secret `create`, plus `get` and `update` restricted to the `sts-tls` resource name.
+- Monitor `rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds` and `rustfs_operator_sts_tls_ca_expiry_timestamp_seconds`.
 
 ## 6. Create a Tenant
 
