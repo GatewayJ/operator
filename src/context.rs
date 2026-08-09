@@ -54,7 +54,7 @@ pub enum Error {
     CredentialSecretInvalidEncoding { secret_name: String, key: String },
 
     #[snafu(display(
-        "credential secret '{}' key '{}' must be at least 8 characters (got {} characters)",
+        "credential secret '{}' key '{}' must be at least 8 UTF-8 bytes after trimming (got {} bytes)",
         secret_name,
         key,
         length
@@ -298,7 +298,7 @@ fn validate_secret_utf8_non_blank(
 const RUSTFS_DEFAULT_CREDENTIAL_VALUE: &str = "rustfsadmin";
 
 const CREDENTIAL_SECRET_KEYS: [&str; 2] = ["accesskey", "secretkey"];
-const MIN_CREDENTIAL_LENGTH: usize = 8;
+const MIN_CREDENTIAL_LENGTH_BYTES: usize = 8;
 
 fn validate_credential_secret_data(secret: &Secret, secret_name: &str) -> Result<(), Error> {
     for key in CREDENTIAL_SECRET_KEYS {
@@ -315,8 +315,15 @@ fn validate_credential_secret_data(secret: &Secret, secret_name: &str) -> Result
                 secret_name: secret_name.to_string(),
                 key: key.to_string(),
             })?;
-        let length = value.len();
-        if length < MIN_CREDENTIAL_LENGTH {
+        if value.contains('\0') {
+            return Err(Error::CredentialSecretInvalidEncoding {
+                secret_name: secret_name.to_string(),
+                key: key.to_string(),
+            });
+        }
+
+        let length = value.trim().len();
+        if length < MIN_CREDENTIAL_LENGTH_BYTES {
             return CredentialSecretTooShortSnafu {
                 secret_name: secret_name.to_string(),
                 key: key.to_string(),
@@ -643,8 +650,8 @@ impl Context {
     /// # Validation Rules
     /// - Secret must exist in the same namespace as the Tenant
     /// - Secret must contain both `accesskey` and `secretkey` keys
-    /// - Both keys must be valid UTF-8 strings
-    /// - Both keys must be at least 8 characters long
+    /// - Both keys must be valid UTF-8 strings without NUL bytes
+    /// - Both keys must be at least 8 UTF-8 bytes after trimming
     ///
     /// # Returns
     /// - `Ok(())` if Secret is valid or not configured
@@ -890,8 +897,8 @@ mod credential_secret_validation_tests {
     fn credential_secret_accepts_valid_values() {
         let secret = Secret {
             data: Some(BTreeMap::from([
-                ("accesskey".to_string(), ByteString(b"access01".to_vec())),
-                ("secretkey".to_string(), ByteString(b"secret01".to_vec())),
+                ("accesskey".to_string(), ByteString(b" access01 ".to_vec())),
+                ("secretkey".to_string(), ByteString(b" secret01 ".to_vec())),
             ])),
             ..Default::default()
         };
@@ -944,11 +951,21 @@ mod credential_secret_validation_tests {
     }
 
     #[test]
-    fn credential_secret_values_must_be_valid_utf8() {
+    fn credential_secret_values_must_be_environment_safe_utf8() {
         let valid_value = ByteString(b"valid-key".to_vec());
         for (access_key, secret_key, invalid_key) in [
             (ByteString(vec![0xff]), valid_value.clone(), "accesskey"),
             (valid_value.clone(), ByteString(vec![0xff]), "secretkey"),
+            (
+                ByteString(b"valid\0key".to_vec()),
+                valid_value.clone(),
+                "accesskey",
+            ),
+            (
+                valid_value.clone(),
+                ByteString(b"valid\0key".to_vec()),
+                "secretkey",
+            ),
         ] {
             let secret = Secret {
                 data: Some(BTreeMap::from([
@@ -970,13 +987,32 @@ mod credential_secret_validation_tests {
     #[test]
     fn credential_secret_values_must_be_at_least_eight_bytes() {
         let valid_value = ByteString(b"valid-key".to_vec());
-        for (access_key, secret_key, invalid_key) in [
-            (ByteString(Vec::new()), valid_value.clone(), "accesskey"),
-            (valid_value.clone(), ByteString(Vec::new()), "secretkey"),
+        for (access_key, secret_key, invalid_key, expected_length) in [
+            (ByteString(Vec::new()), valid_value.clone(), "accesskey", 0),
+            (valid_value.clone(), ByteString(Vec::new()), "secretkey", 0),
             (
                 ByteString(b"short".to_vec()),
                 valid_value.clone(),
                 "accesskey",
+                5,
+            ),
+            (
+                ByteString(b"        ".to_vec()),
+                valid_value.clone(),
+                "accesskey",
+                0,
+            ),
+            (
+                ByteString(b" short ".to_vec()),
+                valid_value.clone(),
+                "accesskey",
+                5,
+            ),
+            (
+                valid_value.clone(),
+                ByteString(b" short ".to_vec()),
+                "secretkey",
+                5,
             ),
         ] {
             let secret = Secret {
@@ -993,10 +1029,28 @@ mod credential_secret_validation_tests {
                 Error::CredentialSecretTooShort {
                     secret_name,
                     key,
-                    ..
-                } if secret_name == "creds" && key == invalid_key
+                    length,
+                } if secret_name == "creds"
+                    && key == invalid_key
+                    && length == expected_length
             ));
         }
+    }
+
+    #[test]
+    fn credential_secret_length_is_measured_in_trimmed_utf8_bytes() {
+        let secret = Secret {
+            data: Some(BTreeMap::from([
+                (
+                    "accesskey".to_string(),
+                    ByteString(" \u{1f510}\u{1f510} ".as_bytes().to_vec()),
+                ),
+                ("secretkey".to_string(), ByteString(b"secret01".to_vec())),
+            ])),
+            ..Default::default()
+        };
+
+        assert!(validate_credential_secret_data(&secret, "creds").is_ok());
     }
 }
 
