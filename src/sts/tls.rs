@@ -24,9 +24,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1 as metav1;
 use kube::api::PostParams;
 use kube::{Api, Client};
 use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyIdMethod, KeyPair, KeyUsagePurpose,
 };
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, UnixTime};
 use snafu::{OptionExt, ResultExt, Snafu};
 use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::sync::watch;
@@ -43,14 +44,17 @@ const SERVICE_ACCOUNT_NAMESPACE_PATH: &str =
 const TLS_CERT_KEY: &str = "tls.crt";
 const TLS_KEY_KEY: &str = "tls.key";
 const CA_CERT_KEY: &str = "ca.crt";
+const CA_KEY_KEY: &str = "ca.key";
 const MANAGED_LABEL: &str = "operator.rustfs.com/managed-sts-tls";
 const POLICY_VERSION_ANNOTATION: &str = "operator.rustfs.com/sts-tls-policy-version";
-const POLICY_VERSION: &str = "v1";
+const POLICY_VERSION: &str = "v2";
+const MANAGED_CA_COMMON_NAME: &str = "rustfs-operator-sts-ca";
 const KUBERNETES_TLS_SECRET_TYPE: &str = "kubernetes.io/tls";
 const SECRET_WAIT_ATTEMPTS: usize = 30;
 const SECRET_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 const TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const CERTIFICATE_VALIDITY: TimeDuration = TimeDuration::days(365);
+const SERVER_CERTIFICATE_VALIDITY: TimeDuration = TimeDuration::days(365);
+const CA_CERTIFICATE_VALIDITY: TimeDuration = TimeDuration::days(3650);
 const CERTIFICATE_RENEWAL_WINDOW: TimeDuration = TimeDuration::days(30);
 const CERTIFICATE_CLOCK_SKEW: TimeDuration = TimeDuration::minutes(5);
 
@@ -125,6 +129,12 @@ pub struct OperatorStsTlsMaterial {
     pub cert_pem: Vec<u8>,
     pub key_pem: Vec<u8>,
     pub ca_pem: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OperatorStsCaMaterial {
+    cert_pem: Vec<u8>,
+    key_pem: Vec<u8>,
 }
 
 impl OperatorStsTlsConfig {
@@ -271,7 +281,14 @@ async fn create_or_get_generated_secret(
     api: &Api<corev1::Secret>,
     config: &OperatorStsTlsConfig,
 ) -> TlsResult<OperatorStsTlsMaterial> {
-    let generated = generated_sts_tls_secret(config)?;
+    let now = OffsetDateTime::now_utc();
+    let (material, ca) = generate_sts_tls_bundle_at(
+        &config.namespace,
+        &config.service_name,
+        &config.cluster_domain,
+        now,
+    )?;
+    let generated = sts_tls_secret_from_material(config, material, &ca);
     match api.create(&PostParams::default(), &generated).await {
         Ok(secret) => {
             info!(
@@ -298,8 +315,8 @@ async fn replace_generated_secret(
     config: &OperatorStsTlsConfig,
     existing: &corev1::Secret,
 ) -> TlsResult<OperatorStsTlsMaterial> {
-    let mut generated = generated_sts_tls_secret(config)?;
-    generated.metadata.resource_version = existing.metadata.resource_version.clone();
+    let now = OffsetDateTime::now_utc();
+    let generated = replacement_sts_tls_secret_at(config, existing, now)?;
     match api
         .replace(STS_TLS_SECRET_NAME, &PostParams::default(), &generated)
         .await
@@ -363,16 +380,50 @@ async fn wait_for_secret_material(
     .fail()
 }
 
-fn generated_sts_tls_secret(config: &OperatorStsTlsConfig) -> TlsResult<corev1::Secret> {
-    let generated = generate_sts_tls_material(
+fn replacement_sts_tls_secret_at(
+    config: &OperatorStsTlsConfig,
+    existing: &corev1::Secret,
+    now: OffsetDateTime,
+) -> TlsResult<corev1::Secret> {
+    let ca = match reusable_managed_ca_from_secret_at(existing, now) {
+        Some(ca) => ca,
+        None => generate_sts_ca_material_at(now)?,
+    };
+    let generated = generate_sts_tls_material_with_ca_at(
         &config.namespace,
         &config.service_name,
         &config.cluster_domain,
+        &ca,
+        now,
     )?;
+    validate_material_at(&generated, now)?;
+
+    let mut secret = sts_tls_secret_from_material(config, generated, &ca);
+    secret.metadata.resource_version = existing.metadata.resource_version.clone();
+
+    let mut labels = existing.metadata.labels.clone().unwrap_or_default();
+    labels.extend(secret.metadata.labels.take().unwrap_or_default());
+    secret.metadata.labels = Some(labels);
+
+    let mut annotations = existing.metadata.annotations.clone().unwrap_or_default();
+    annotations.insert(
+        POLICY_VERSION_ANNOTATION.to_string(),
+        POLICY_VERSION.to_string(),
+    );
+    secret.metadata.annotations = Some(annotations);
+    Ok(secret)
+}
+
+fn sts_tls_secret_from_material(
+    config: &OperatorStsTlsConfig,
+    generated: OperatorStsTlsMaterial,
+    ca: &OperatorStsCaMaterial,
+) -> corev1::Secret {
     let mut data = BTreeMap::new();
     data.insert(TLS_CERT_KEY.to_string(), ByteString(generated.cert_pem));
     data.insert(TLS_KEY_KEY.to_string(), ByteString(generated.key_pem));
     data.insert(CA_CERT_KEY.to_string(), ByteString(generated.ca_pem));
+    data.insert(CA_KEY_KEY.to_string(), ByteString(ca.key_pem.clone()));
 
     let mut labels = BTreeMap::new();
     labels.insert(MANAGED_LABEL.to_string(), "true".to_string());
@@ -389,7 +440,7 @@ fn generated_sts_tls_secret(config: &OperatorStsTlsConfig) -> TlsResult<corev1::
         POLICY_VERSION.to_string(),
     )]);
 
-    Ok(corev1::Secret {
+    corev1::Secret {
         metadata: metav1::ObjectMeta {
             name: Some(STS_TLS_SECRET_NAME.to_string()),
             namespace: Some(config.namespace.clone()),
@@ -400,42 +451,97 @@ fn generated_sts_tls_secret(config: &OperatorStsTlsConfig) -> TlsResult<corev1::
         type_: Some(KUBERNETES_TLS_SECRET_TYPE.to_string()),
         data: Some(data),
         ..Default::default()
-    })
+    }
 }
 
-fn generate_sts_tls_material(
-    namespace: &str,
-    service_name: &str,
-    cluster_domain: &str,
-) -> TlsResult<OperatorStsTlsMaterial> {
-    generate_sts_tls_material_at(
-        namespace,
-        service_name,
-        cluster_domain,
-        OffsetDateTime::now_utc(),
-    )
-}
-
+#[cfg(test)]
 fn generate_sts_tls_material_at(
     namespace: &str,
     service_name: &str,
     cluster_domain: &str,
     now: OffsetDateTime,
 ) -> TlsResult<OperatorStsTlsMaterial> {
+    generate_sts_tls_bundle_at(namespace, service_name, cluster_domain, now)
+        .map(|(material, _)| material)
+}
+
+fn generate_sts_tls_bundle_at(
+    namespace: &str,
+    service_name: &str,
+    cluster_domain: &str,
+    now: OffsetDateTime,
+) -> TlsResult<(OperatorStsTlsMaterial, OperatorStsCaMaterial)> {
+    let ca = generate_sts_ca_material_at(now)?;
+    let material =
+        generate_sts_tls_material_with_ca_at(namespace, service_name, cluster_domain, &ca, now)?;
+    Ok((material, ca))
+}
+
+fn generate_sts_ca_material_at(now: OffsetDateTime) -> TlsResult<OperatorStsCaMaterial> {
     let ca_key = KeyPair::generate().context(GenerateCertificateSnafu)?;
-    let mut ca_params = CertificateParams::default();
-    ca_params.not_before = now - CERTIFICATE_CLOCK_SKEW;
-    ca_params.not_after = now + CERTIFICATE_VALIDITY;
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    ca_params.key_usages = vec![
-        KeyUsagePurpose::KeyCertSign,
-        KeyUsagePurpose::DigitalSignature,
-        KeyUsagePurpose::CrlSign,
-    ];
+    let ca_params = operator_ca_params(now);
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .context(GenerateCertificateSnafu)?;
+    Ok(OperatorStsCaMaterial {
+        cert_pem: ca_cert.pem().into_bytes(),
+        key_pem: ca_key.serialize_pem().into_bytes(),
+    })
+}
+
+fn generate_sts_tls_material_with_ca_at(
+    namespace: &str,
+    service_name: &str,
+    cluster_domain: &str,
+    ca: &OperatorStsCaMaterial,
+    now: OffsetDateTime,
+) -> TlsResult<OperatorStsTlsMaterial> {
+    let ca_key = validated_ca_key_pair(&ca.cert_pem, &ca.key_pem)?;
+    // Policy v2 CAs are generated from these fixed parameters. Reconstructing the
+    // issuer preserves its subject and key identifier while reusing the stored key.
+    let ca_params = operator_ca_params(now);
     let ca_cert = ca_params
         .self_signed(&ca_key)
         .context(GenerateCertificateSnafu)?;
 
+    generate_sts_tls_material_with_issuer_at(
+        namespace,
+        service_name,
+        cluster_domain,
+        ca.cert_pem.clone(),
+        &ca_cert,
+        &ca_key,
+        now,
+    )
+}
+
+fn operator_ca_params(now: OffsetDateTime) -> CertificateParams {
+    let mut params = CertificateParams::default();
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, MANAGED_CA_COMMON_NAME);
+    params.distinguished_name = distinguished_name;
+    params.key_identifier_method = KeyIdMethod::Sha256;
+    params.not_before = now - CERTIFICATE_CLOCK_SKEW;
+    params.not_after = now + CA_CERTIFICATE_VALIDITY;
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::CrlSign,
+    ];
+    params
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_sts_tls_material_with_issuer_at(
+    namespace: &str,
+    service_name: &str,
+    cluster_domain: &str,
+    ca_pem: Vec<u8>,
+    ca_cert: &Certificate,
+    ca_key: &KeyPair,
+    now: OffsetDateTime,
+) -> TlsResult<OperatorStsTlsMaterial> {
     let server_key = KeyPair::generate().context(GenerateCertificateSnafu)?;
     let mut server_names = service_dns_names(namespace, service_name, cluster_domain);
     server_names.push("localhost".to_string());
@@ -443,7 +549,7 @@ fn generate_sts_tls_material_at(
     let mut server_params =
         CertificateParams::new(server_names).context(GenerateCertificateSnafu)?;
     server_params.not_before = now - CERTIFICATE_CLOCK_SKEW;
-    server_params.not_after = now + CERTIFICATE_VALIDITY;
+    server_params.not_after = now + SERVER_CERTIFICATE_VALIDITY;
     server_params.is_ca = IsCa::NoCa;
     server_params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
@@ -451,14 +557,14 @@ fn generate_sts_tls_material_at(
     ];
     server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     let server_cert = server_params
-        .signed_by(&server_key, &ca_cert, &ca_key)
+        .signed_by(&server_key, ca_cert, ca_key)
         .context(GenerateCertificateSnafu)?;
 
     Ok(OperatorStsTlsMaterial {
         secret_name: STS_TLS_SECRET_NAME.to_string(),
         cert_pem: server_cert.pem().into_bytes(),
         key_pem: server_key.serialize_pem().into_bytes(),
-        ca_pem: ca_cert.pem().into_bytes(),
+        ca_pem,
     })
 }
 
@@ -471,8 +577,8 @@ fn material_from_secret(
         secret: STS_TLS_SECRET_NAME.to_string(),
     })?;
 
-    let cert_pem = secret_data(data, TLS_CERT_KEY, config)?;
-    let key_pem = secret_data(data, TLS_KEY_KEY, config)?;
+    let cert_pem = secret_data(data, TLS_CERT_KEY, config, STS_TLS_SECRET_NAME)?;
+    let key_pem = secret_data(data, TLS_KEY_KEY, config, STS_TLS_SECRET_NAME)?;
     let ca_pem = data
         .get(CA_CERT_KEY)
         .or_else(|| data.get(TLS_CERT_KEY))
@@ -501,23 +607,45 @@ fn validated_material_from_secret(
     Ok(material)
 }
 
-fn validate_material_at(material: &OperatorStsTlsMaterial, now: OffsetDateTime) -> TlsResult<()> {
-    let now = now.unix_timestamp();
-    for (pem, key) in [
-        (material.cert_pem.as_slice(), TLS_CERT_KEY),
-        (material.ca_pem.as_slice(), CA_CERT_KEY),
-    ] {
-        let (not_before, not_after) = certificate_validity_timestamps(pem, key)?;
-        if now < not_before || now > not_after {
-            return Err(Error::InspectCertificate {
-                key,
-                reason: format!(
-                    "certificate is not valid at timestamp {now} (valid from {not_before} to {not_after})"
-                ),
-            });
-        }
+fn reusable_managed_ca_from_secret_at(
+    secret: &corev1::Secret,
+    now: OffsetDateTime,
+) -> Option<OperatorStsCaMaterial> {
+    if !managed_secret_policy_is_current(secret) {
+        return None;
     }
-    Ok(())
+    let data = secret.data.as_ref()?;
+    let cert_pem = data.get(CA_CERT_KEY)?.0.clone();
+    let key_pem = data.get(CA_KEY_KEY)?.0.clone();
+    if cert_pem.is_empty() || key_pem.is_empty() {
+        return None;
+    }
+
+    validate_reusable_ca_at(OperatorStsCaMaterial { cert_pem, key_pem }, now).ok()
+}
+
+fn validate_reusable_ca_at(
+    material: OperatorStsCaMaterial,
+    now: OffsetDateTime,
+) -> TlsResult<OperatorStsCaMaterial> {
+    validated_ca_key_pair(&material.cert_pem, &material.key_pem)?;
+    let (not_before, not_after) = certificate_validity_timestamps(&material.cert_pem, CA_CERT_KEY)?;
+    let now_timestamp = now.unix_timestamp();
+    if now_timestamp < not_before
+        || not_after <= (now + CERTIFICATE_RENEWAL_WINDOW).unix_timestamp()
+    {
+        return Err(Error::InspectCertificate {
+            key: CA_CERT_KEY,
+            reason: format!(
+                "managed CA cannot be reused at timestamp {now_timestamp} (valid from {not_before} to {not_after})"
+            ),
+        });
+    }
+    Ok(material)
+}
+
+fn validate_material_at(material: &OperatorStsTlsMaterial, now: OffsetDateTime) -> TlsResult<()> {
+    material_expiry_timestamps_at(material, now).map(|_| ())
 }
 
 fn managed_secret_needs_rotation(
@@ -525,17 +653,11 @@ fn managed_secret_needs_rotation(
     material: &OperatorStsTlsMaterial,
     now: OffsetDateTime,
 ) -> TlsResult<bool> {
-    let policy_is_current = secret
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(POLICY_VERSION_ANNOTATION))
-        .is_some_and(|version| version == POLICY_VERSION);
-    if !policy_is_current {
+    if !managed_secret_policy_is_current(secret) {
         return Ok(true);
     }
 
-    let (certificate_expiry, ca_expiry) = material_expiry_timestamps(material)?;
+    let (certificate_expiry, ca_expiry) = material_expiry_timestamps_at(material, now)?;
     let renewal_deadline = (now + CERTIFICATE_RENEWAL_WINDOW).unix_timestamp();
     Ok(certificate_expiry <= renewal_deadline || ca_expiry <= renewal_deadline)
 }
@@ -553,31 +675,106 @@ fn should_rotate_managed_secret(
 }
 
 fn record_expiry_metrics(material: &OperatorStsTlsMaterial) -> TlsResult<()> {
-    let (certificate_expiry, ca_expiry) = material_expiry_timestamps(material)?;
+    let (certificate_expiry, ca_expiry) =
+        material_expiry_timestamps_at(material, OffsetDateTime::now_utc())?;
     crate::metrics::set_sts_tls_expiry_timestamps(certificate_expiry, ca_expiry);
     Ok(())
 }
 
-fn material_expiry_timestamps(material: &OperatorStsTlsMaterial) -> TlsResult<(i64, i64)> {
-    Ok((
-        certificate_expiry_timestamp(&material.cert_pem, TLS_CERT_KEY)?,
-        certificate_expiry_timestamp(&material.ca_pem, CA_CERT_KEY)?,
-    ))
-}
+fn material_expiry_timestamps_at(
+    material: &OperatorStsTlsMaterial,
+    now: OffsetDateTime,
+) -> TlsResult<(i64, i64)> {
+    let certificates = certificate_bundle(&material.cert_pem, TLS_CERT_KEY)?;
+    let ca_certificates = certificate_bundle(&material.ca_pem, CA_CERT_KEY)?;
+    let end_entity = webpki::EndEntityCert::try_from(&certificates[0]).map_err(|source| {
+        Error::InspectCertificate {
+            key: TLS_CERT_KEY,
+            reason: source.to_string(),
+        }
+    })?;
+    let trust_anchors = ca_certificates
+        .iter()
+        .map(webpki::anchor_from_trusted_cert)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| Error::InspectCertificate {
+            key: CA_CERT_KEY,
+            reason: source.to_string(),
+        })?;
+    let timestamp =
+        u64::try_from(now.unix_timestamp()).map_err(|source| Error::InspectCertificate {
+            key: TLS_CERT_KEY,
+            reason: source.to_string(),
+        })?;
+    let verified_path = end_entity
+        .verify_for_usage(
+            webpki::ALL_VERIFICATION_ALGS,
+            &trust_anchors,
+            &certificates[1..],
+            UnixTime::since_unix_epoch(Duration::from_secs(timestamp)),
+            webpki::KeyUsage::server_auth(),
+            None,
+            None,
+        )
+        .map_err(|source| Error::InspectCertificate {
+            key: CA_CERT_KEY,
+            reason: format!("certificate chain validation failed: {source}"),
+        })?;
+    let ca_index = trust_anchors
+        .iter()
+        .position(|anchor| std::ptr::eq(anchor, verified_path.anchor()))
+        .context(InspectCertificateSnafu {
+            key: CA_CERT_KEY,
+            reason: "verified trust anchor was not found in the CA bundle".to_string(),
+        })?;
 
-fn certificate_expiry_timestamp(pem: &[u8], key: &'static str) -> TlsResult<i64> {
-    certificate_validity_timestamps(pem, key).map(|(_, not_after)| not_after)
+    let (_, certificate_expiry) =
+        certificate_validity_timestamps_der(&certificates[0], TLS_CERT_KEY)?;
+    let (ca_not_before, ca_expiry) =
+        certificate_validity_timestamps_der(&ca_certificates[ca_index], CA_CERT_KEY)?;
+    let now = now.unix_timestamp();
+    if now < ca_not_before || now > ca_expiry {
+        return Err(Error::InspectCertificate {
+            key: CA_CERT_KEY,
+            reason: format!(
+                "issuing CA is not valid at timestamp {now} (valid from {ca_not_before} to {ca_expiry})"
+            ),
+        });
+    }
+
+    Ok((certificate_expiry, ca_expiry))
 }
 
 fn certificate_validity_timestamps(pem: &[u8], key: &'static str) -> TlsResult<(i64, i64)> {
-    let certificate = rustls_pemfile::certs(&mut Cursor::new(pem))
-        .next()
-        .transpose()
-        .context(ParseCertificateSnafu)?
-        .context(InspectCertificateSnafu {
+    let certificate =
+        certificate_bundle(pem, key)?
+            .into_iter()
+            .next()
+            .context(InspectCertificateSnafu {
+                key,
+                reason: "certificate bundle is empty".to_string(),
+            })?;
+    certificate_validity_timestamps_der(&certificate, key)
+}
+
+fn certificate_bundle(pem: &[u8], key: &'static str) -> TlsResult<Vec<CertificateDer<'static>>> {
+    let certificates = rustls_pemfile::certs(&mut Cursor::new(pem))
+        .collect::<Result<Vec<_>, _>>()
+        .context(ParseCertificateSnafu)?;
+    if certificates.is_empty() {
+        return InspectCertificateSnafu {
             key,
             reason: "certificate bundle is empty".to_string(),
-        })?;
+        }
+        .fail();
+    }
+    Ok(certificates)
+}
+
+fn certificate_validity_timestamps_der(
+    certificate: &CertificateDer<'_>,
+    key: &'static str,
+) -> TlsResult<(i64, i64)> {
     let (_, certificate) = parse_x509_certificate(certificate.as_ref()).map_err(|source| {
         Error::InspectCertificate {
             key,
@@ -590,17 +787,55 @@ fn certificate_validity_timestamps(pem: &[u8], key: &'static str) -> TlsResult<(
     ))
 }
 
+fn validated_ca_key_pair(ca_pem: &[u8], ca_key_pem: &[u8]) -> TlsResult<KeyPair> {
+    let ca_der = certificate_bundle(ca_pem, CA_CERT_KEY)?
+        .into_iter()
+        .next()
+        .context(InspectCertificateSnafu {
+            key: CA_CERT_KEY,
+            reason: "certificate bundle is empty".to_string(),
+        })?;
+    let ca_key_text =
+        std::str::from_utf8(ca_key_pem).map_err(|source| Error::InspectCertificate {
+            key: CA_KEY_KEY,
+            reason: source.to_string(),
+        })?;
+    let ca_key = KeyPair::from_pem(ca_key_text).context(GenerateCertificateSnafu)?;
+    let (_, ca_certificate) =
+        parse_x509_certificate(ca_der.as_ref()).map_err(|source| Error::InspectCertificate {
+            key: CA_CERT_KEY,
+            reason: source.to_string(),
+        })?;
+    if ca_key.public_key_der().as_slice() != ca_certificate.public_key().raw {
+        return Err(Error::InspectCertificate {
+            key: CA_KEY_KEY,
+            reason: "private key does not match the managed CA certificate".to_string(),
+        });
+    }
+    Ok(ca_key)
+}
+
+fn managed_secret_policy_is_current(secret: &corev1::Secret) -> bool {
+    secret
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(POLICY_VERSION_ANNOTATION))
+        .is_some_and(|version| version == POLICY_VERSION)
+}
+
 fn secret_data(
     data: &BTreeMap<String, ByteString>,
     key: &'static str,
     config: &OperatorStsTlsConfig,
+    secret: &'static str,
 ) -> TlsResult<Vec<u8>> {
     data.get(key)
         .map(|bytes| bytes.0.clone())
         .filter(|bytes| !bytes.is_empty())
         .context(SecretMissingKeySnafu {
             namespace: config.namespace.clone(),
-            secret: STS_TLS_SECRET_NAME.to_string(),
+            secret: secret.to_string(),
             key,
         })
 }
@@ -689,10 +924,11 @@ mod tests {
 
     #[test]
     fn generated_material_builds_rustls_server_config() {
-        let material = generate_sts_tls_material(
+        let material = generate_sts_tls_material_at(
             "rustfs-system",
             "rustfs-operator-sts",
             cluster_dns::DEFAULT_CLUSTER_DOMAIN,
+            OffsetDateTime::now_utc(),
         )
         .unwrap();
 
@@ -703,9 +939,9 @@ mod tests {
     }
 
     #[test]
-    fn generated_certificates_are_valid_for_one_year() {
+    fn generated_leaf_is_valid_for_one_year_and_ca_for_ten_years() {
         let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
-        let material = generate_sts_tls_material_at(
+        let (material, ca) = generate_sts_tls_bundle_at(
             "rustfs-system",
             "rustfs-operator-sts",
             cluster_dns::DEFAULT_CLUSTER_DOMAIN,
@@ -713,10 +949,18 @@ mod tests {
         )
         .unwrap();
 
-        let (certificate_expiry, ca_expiry) = material_expiry_timestamps(&material).unwrap();
-        let expected_expiry = (now + CERTIFICATE_VALIDITY).unix_timestamp();
-        assert_eq!(certificate_expiry, expected_expiry);
-        assert_eq!(ca_expiry, expected_expiry);
+        let (certificate_expiry, ca_expiry) =
+            material_expiry_timestamps_at(&material, now).unwrap();
+        assert_eq!(
+            certificate_expiry,
+            (now + SERVER_CERTIFICATE_VALIDITY).unix_timestamp()
+        );
+        assert_eq!(ca_expiry, (now + CA_CERTIFICATE_VALIDITY).unix_timestamp());
+        validated_ca_key_pair(&ca.cert_pem, &ca.key_pem).unwrap();
+
+        let config = test_config();
+        let secret = sts_tls_secret_from_material(&config, material, &ca);
+        assert!(secret.data.unwrap().contains_key(CA_KEY_KEY));
     }
 
     #[test]
@@ -750,15 +994,15 @@ mod tests {
     fn managed_certificate_rotation_migrates_legacy_policy_and_renews_early() {
         let config = test_config();
         let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
-        let current_material = generate_sts_tls_material_at(
+        let (current_material, current_ca) = generate_sts_tls_bundle_at(
             &config.namespace,
             &config.service_name,
             &config.cluster_domain,
             now,
         )
         .unwrap();
-        let mut secret = generated_sts_tls_secret(&config).unwrap();
-        set_secret_material(&mut secret, &current_material);
+        let mut secret =
+            sts_tls_secret_from_material(&config, current_material.clone(), &current_ca);
 
         assert!(!managed_secret_needs_rotation(&secret, &current_material, now).unwrap());
 
@@ -775,24 +1019,164 @@ mod tests {
             POLICY_VERSION_ANNOTATION.to_string(),
             POLICY_VERSION.to_string(),
         )]));
-        let expiring_material = generate_sts_tls_material_at(
+        let (expiring_material, expiring_ca) = generate_sts_tls_bundle_at(
             &config.namespace,
             &config.service_name,
             &config.cluster_domain,
             now - TimeDuration::days(336),
         )
         .unwrap();
-        set_secret_material(&mut secret, &expiring_material);
+        set_secret_material(&mut secret, &expiring_material, &expiring_ca);
         assert!(managed_secret_needs_rotation(&secret, &expiring_material, now).unwrap());
+
+        secret
+            .metadata
+            .annotations
+            .get_or_insert_default()
+            .insert("replicator.example/enabled".to_string(), "true".to_string());
+        secret.metadata.resource_version = Some("42".to_string());
+        let original_ca_key = secret.data.as_ref().unwrap()[CA_KEY_KEY].0.clone();
+        let replacement = replacement_sts_tls_secret_at(&config, &secret, now).unwrap();
+        let replacement_material = material_from_secret(&config, &replacement).unwrap();
+
+        assert_ne!(replacement_material.cert_pem, expiring_material.cert_pem);
+        assert_eq!(replacement_material.ca_pem, expiring_material.ca_pem);
+        assert_eq!(
+            replacement.data.as_ref().unwrap()[CA_KEY_KEY].0,
+            original_ca_key
+        );
+        assert_eq!(replacement.metadata.resource_version.as_deref(), Some("42"));
+        assert_eq!(
+            replacement
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get("replicator.example/enabled"))
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            replacement
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(POLICY_VERSION_ANNOTATION))
+                .map(String::as_str),
+            Some(POLICY_VERSION)
+        );
+        validate_material_at(&replacement_material, now).unwrap();
+    }
+
+    #[test]
+    fn ca_bundle_validation_uses_the_anchor_that_signs_the_leaf() {
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let expired = generate_sts_tls_material_at(
+            "rustfs-system",
+            "rustfs-operator-sts",
+            cluster_dns::DEFAULT_CLUSTER_DOMAIN,
+            now - CA_CERTIFICATE_VALIDITY - TimeDuration::days(1),
+        )
+        .unwrap();
+        let mut current = generate_sts_tls_material_at(
+            "rustfs-system",
+            "rustfs-operator-sts",
+            cluster_dns::DEFAULT_CLUSTER_DOMAIN,
+            now,
+        )
+        .unwrap();
+        let expected_ca_expiry = (now + CA_CERTIFICATE_VALIDITY).unix_timestamp();
+        let mut ca_bundle = expired.ca_pem;
+        ca_bundle.extend_from_slice(&current.ca_pem);
+        current.ca_pem = ca_bundle;
+
+        let (_, ca_expiry) = material_expiry_timestamps_at(&current, now).unwrap();
+        assert_eq!(ca_expiry, expected_ca_expiry);
+        validate_material_at(&current, now).unwrap();
+    }
+
+    #[test]
+    fn managed_ca_is_reused_only_with_current_policy_and_valid_key() {
+        let config = test_config();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let (material, ca) = generate_sts_tls_bundle_at(
+            &config.namespace,
+            &config.service_name,
+            &config.cluster_domain,
+            now,
+        )
+        .unwrap();
+        let mut secret = sts_tls_secret_from_material(&config, material, &ca);
+
+        assert_eq!(reusable_managed_ca_from_secret_at(&secret, now), Some(ca));
+
+        secret.metadata.annotations = None;
+        assert!(reusable_managed_ca_from_secret_at(&secret, now).is_none());
+
+        secret.metadata.annotations = Some(BTreeMap::from([(
+            POLICY_VERSION_ANNOTATION.to_string(),
+            POLICY_VERSION.to_string(),
+        )]));
+        secret
+            .data
+            .as_mut()
+            .unwrap()
+            .insert(CA_KEY_KEY.to_string(), ByteString(b"invalid key".to_vec()));
+        assert!(reusable_managed_ca_from_secret_at(&secret, now).is_none());
+    }
+
+    #[test]
+    fn managed_ca_rotates_automatically_in_renewal_window() {
+        let config = test_config();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let (material, ca) = generate_sts_tls_bundle_at(
+            &config.namespace,
+            &config.service_name,
+            &config.cluster_domain,
+            now - CA_CERTIFICATE_VALIDITY + TimeDuration::days(29),
+        )
+        .unwrap();
+        let secret = sts_tls_secret_from_material(&config, material, &ca);
+
+        assert!(reusable_managed_ca_from_secret_at(&secret, now).is_none());
+        let replacement = replacement_sts_tls_secret_at(&config, &secret, now).unwrap();
+        let replacement_material = material_from_secret(&config, &replacement).unwrap();
+
+        assert_ne!(replacement_material.ca_pem, ca.cert_pem);
+        assert_ne!(replacement.data.as_ref().unwrap()[CA_KEY_KEY].0, ca.key_pem);
+        validate_material_at(&replacement_material, now).unwrap();
+    }
+
+    #[test]
+    fn legacy_managed_secret_without_ca_key_rotates_ca_once() {
+        let config = test_config();
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let (material, ca) = generate_sts_tls_bundle_at(
+            &config.namespace,
+            &config.service_name,
+            &config.cluster_domain,
+            now,
+        )
+        .unwrap();
+        let mut secret = sts_tls_secret_from_material(&config, material, &ca);
+        secret.data.as_mut().unwrap().remove(CA_KEY_KEY);
+        secret.metadata.annotations = None;
+
+        let replacement = replacement_sts_tls_secret_at(&config, &secret, now).unwrap();
+        let replacement_material = material_from_secret(&config, &replacement).unwrap();
+
+        assert_ne!(replacement_material.ca_pem, ca.cert_pem);
+        assert!(replacement.data.as_ref().unwrap().contains_key(CA_KEY_KEY));
+        validate_material_at(&replacement_material, now).unwrap();
     }
 
     #[test]
     fn secret_material_uses_leaf_as_ca_fallback() {
         let config = test_config();
-        let generated = generate_sts_tls_material(
+        let generated = generate_sts_tls_material_at(
             &config.namespace,
             &config.service_name,
             &config.cluster_domain,
+            OffsetDateTime::now_utc(),
         )
         .unwrap();
         let mut data = BTreeMap::new();
@@ -822,7 +1206,11 @@ mod tests {
         }
     }
 
-    fn set_secret_material(secret: &mut corev1::Secret, material: &OperatorStsTlsMaterial) {
+    fn set_secret_material(
+        secret: &mut corev1::Secret,
+        material: &OperatorStsTlsMaterial,
+        ca: &OperatorStsCaMaterial,
+    ) {
         secret.data = Some(BTreeMap::from([
             (
                 TLS_CERT_KEY.to_string(),
@@ -833,6 +1221,7 @@ mod tests {
                 ByteString(material.key_pem.clone()),
             ),
             (CA_CERT_KEY.to_string(), ByteString(material.ca_pem.clone())),
+            (CA_KEY_KEY.to_string(), ByteString(ca.key_pem.clone())),
         ]));
     }
 }
