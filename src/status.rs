@@ -60,7 +60,7 @@ impl StatusError {
                 Reason::CredentialSecretInvalidEncoding,
                 ConditionType::CredentialsReady,
                 format!(
-                    "Credential Secret '{}' key '{}' must contain valid UTF-8",
+                    "Credential Secret '{}' key '{}' must contain valid UTF-8 without NUL bytes",
                     secret_name, key
                 ),
             ),
@@ -70,7 +70,7 @@ impl StatusError {
                 Reason::CredentialSecretTooShort,
                 ConditionType::CredentialsReady,
                 format!(
-                    "Credential Secret '{}' key '{}' must be at least 8 characters",
+                    "Credential Secret '{}' key '{}' must be at least 8 UTF-8 bytes after trimming",
                     secret_name, key
                 ),
             ),

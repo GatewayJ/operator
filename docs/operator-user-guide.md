@@ -447,7 +447,7 @@ spec:
 
 ### 7.3 Credentials
 
-For production, use `spec.credsSecret`. The Secret must be in the same namespace as the Tenant and contain UTF-8 `accesskey` and `secretkey` keys. Both values must be at least 8 characters.
+For production, use `spec.credsSecret`. The Secret must be in the same namespace as the Tenant and contain `accesskey` and `secretkey` keys. Both values must be valid UTF-8 without NUL bytes and at least 8 UTF-8 bytes after trimming.
 
 ```yaml
 apiVersion: v1
@@ -1146,7 +1146,8 @@ Common blocked reasons:
 | `InvalidPoolSpec` | Pool count, total volume count, pool name, and immutable fields. |
 | `CredentialSecretNotFound` | Secret exists in the Tenant namespace. |
 | `CredentialSecretMissingKey` | Secret contains `accesskey` and `secretkey`. |
-| `CredentialSecretTooShort` | Both credential values are at least 8 characters. |
+| `CredentialSecretInvalidEncoding` | Both credential values are valid UTF-8 without NUL bytes. |
+| `CredentialSecretTooShort` | Both credential values are at least 8 UTF-8 bytes after trimming. |
 | `KmsSecretNotFound` / `KmsSecretMissingKey` | KMS Secret exists and contains required keys, such as Vault `vault-token` or the Local KMS `masterKeySecretRef.key`. |
 | `CertManagerCrdMissing` / `CertManagerIssuerNotFound` | cert-manager is installed and the issuer exists. |
 | `InvalidWorkloadSecurityProfile` | Fix the seccomp or AppArmor profile type and its `localhostProfile` pairing. |

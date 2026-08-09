@@ -424,7 +424,7 @@ spec:
 
 ### 7.3 凭据配置
 
-生产环境建议使用 `spec.credsSecret`。Secret 必须与 Tenant 在同一 namespace，并包含 UTF-8 编码的 `accesskey` 和 `secretkey` 两个 key，两个值长度都至少为 8 个字符。
+生产环境建议使用 `spec.credsSecret`。Secret 必须与 Tenant 在同一 namespace，并包含 `accesskey` 和 `secretkey` 两个 key；两个值都必须是不含 NUL 字节的有效 UTF-8，且 trim 后至少为 8 个 UTF-8 字节。
 
 ```yaml
 apiVersion: v1
@@ -1104,7 +1104,8 @@ kubectl logs -n rustfs-system \
 | `InvalidPoolSpec` | Pool 数量、总卷数、pool 名称和不可变字段。 |
 | `CredentialSecretNotFound` | Secret 是否存在于 Tenant namespace。 |
 | `CredentialSecretMissingKey` | Secret 是否包含 `accesskey` 和 `secretkey`。 |
-| `CredentialSecretTooShort` | 两个凭据值是否都至少 8 个字符。 |
+| `CredentialSecretInvalidEncoding` | 两个凭据值是否都是不含 NUL 字节的有效 UTF-8。 |
+| `CredentialSecretTooShort` | 两个凭据值 trim 后是否都至少为 8 个 UTF-8 字节。 |
 | `KmsSecretNotFound` / `KmsSecretMissingKey` | KMS Secret 是否存在，并包含必要 key，例如 Vault 的 `vault-token` 或 Local KMS 的 `masterKeySecretRef.key`。 |
 | `CertManagerCrdMissing` / `CertManagerIssuerNotFound` | cert-manager 是否安装，issuer 是否存在。 |
 | `InvalidWorkloadSecurityProfile` | 修正 seccomp 或 AppArmor profile 类型及其与 `localhostProfile` 的组合。 |

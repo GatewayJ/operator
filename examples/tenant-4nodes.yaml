@@ -68,7 +68,8 @@ spec:
       value: "true"
 
 ---
-# Credentials Secret for RustFS (keys must be at least 8 characters)
+# Credentials Secret for RustFS (values must be valid UTF-8 without NUL bytes
+# and at least 8 UTF-8 bytes after trimming)
 # Example: accesskey admin123, secretkey admin12345 (dev only)
 apiVersion: v1
 kind: Secret
