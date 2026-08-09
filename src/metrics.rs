@@ -467,22 +467,7 @@ pub fn render() -> String {
         "result",
         &metrics().sts_request_duration,
     );
-    render_gauge(
-        &mut output,
-        "rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds",
-        "Unix timestamp when the active operator STS TLS server certificate expires.",
-        metrics()
-            .sts_tls_certificate_expiry_timestamp_seconds
-            .load(Ordering::Relaxed) as f64,
-    );
-    render_gauge(
-        &mut output,
-        "rustfs_operator_sts_tls_ca_expiry_timestamp_seconds",
-        "Unix timestamp when the active operator STS TLS CA certificate expires.",
-        metrics()
-            .sts_tls_ca_expiry_timestamp_seconds
-            .load(Ordering::Relaxed) as f64,
-    );
+    render_sts_tls_expiry_metrics(&mut output, metrics());
     render_admission_rejection_counter(&mut output);
     render_unauthenticated_request_counter(&mut output);
 
@@ -506,6 +491,31 @@ pub fn render() -> String {
     render_tenant_storage(&mut output);
 
     output
+}
+
+fn render_sts_tls_expiry_metrics(output: &mut String, metrics: &Metrics) {
+    let certificate = metrics
+        .sts_tls_certificate_expiry_timestamp_seconds
+        .load(Ordering::Relaxed);
+    let ca = metrics
+        .sts_tls_ca_expiry_timestamp_seconds
+        .load(Ordering::Relaxed);
+    if certificate == 0 || ca == 0 {
+        return;
+    }
+
+    render_gauge(
+        output,
+        "rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds",
+        "Unix timestamp when the active operator STS TLS server certificate expires.",
+        certificate as f64,
+    );
+    render_gauge(
+        output,
+        "rustfs_operator_sts_tls_ca_expiry_timestamp_seconds",
+        "Unix timestamp when the active operator STS TLS CA certificate expires.",
+        ca as f64,
+    );
 }
 
 fn render_admission_rejection_counter(output: &mut String) {
@@ -878,9 +888,16 @@ mod tests {
 
     #[test]
     fn sts_tls_expiry_metrics_are_rendered() {
-        set_sts_tls_expiry_timestamps(1_800_000_000, 1_800_000_001);
+        let metrics = Metrics::default();
+        metrics
+            .sts_tls_certificate_expiry_timestamp_seconds
+            .store(1_800_000_000, Ordering::Relaxed);
+        metrics
+            .sts_tls_ca_expiry_timestamp_seconds
+            .store(1_800_000_001, Ordering::Relaxed);
 
-        let rendered = render();
+        let mut rendered = String::new();
+        render_sts_tls_expiry_metrics(&mut rendered, &metrics);
         assert!(rendered.contains(
             "rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds 1800000000.000000"
         ));
@@ -888,6 +905,15 @@ mod tests {
             rendered
                 .contains("rustfs_operator_sts_tls_ca_expiry_timestamp_seconds 1800000001.000000")
         );
+    }
+
+    #[test]
+    fn sts_tls_expiry_metrics_are_omitted_until_material_is_loaded() {
+        let mut rendered = String::new();
+        render_sts_tls_expiry_metrics(&mut rendered, &Metrics::default());
+
+        assert!(!rendered.contains("rustfs_operator_sts_tls_certificate_expiry"));
+        assert!(!rendered.contains("rustfs_operator_sts_tls_ca_expiry"));
     }
 
     #[test]

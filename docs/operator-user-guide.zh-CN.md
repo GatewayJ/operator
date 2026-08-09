@@ -310,7 +310,7 @@ sts:
 - 从多 Console 副本的旧版本升级前，先把 `console.replicas` 调整为 `1`；升级会有短暂 Console 不可用，用户需要重新登录。回滚到不支持服务端会话的旧版本前，先把 Console Deployment 缩容到零，完成回滚后再恢复一个副本，避免两种 cookie 格式同时在线。
 - 生产环境应使用 HTTPS 并保持 `CONSOLE_COOKIE_SECURE` 启用。仅本地 HTTP 调试时才关闭。
 - `sts.tls.auto=false` 是默认值。必须预创建包含外部签发的 `tls.crt`、`tls.key` 和 `ca.crt` 的 `sts-tls`，否则 Operator 会输出可执行的错误信息并启动失败。替换该 Secret 可手动轮换证书；有效的新证书会在五分钟内热加载，刷新失败时继续使用最后一个有效配置。
-- Kind 等开发环境需要显式设置 `sts.tls.auto=true`，由 Operator 管理自签 CA。自动生成的证书有效期为一年，并在到期前 30 天轮换。升级后，旧策略生成的 Operator 托管 Secret 会被替换一次，因此需要同步刷新客户端信任的 `ca.crt`。当 `rbac.create=true` 时，Chart 通过命名空间级 Role 隔离写权限，全集群 Secret 和 ConfigMap 权限保持只读。当 `rbac.create=false` 时，必须为 Operator ServiceAccount 自行提供等效的 Role 和 RoleBinding：允许在 Operator namespace 内 `create` Secret，并将 `get`、`update` 限定到名为 `sts-tls` 的资源。
+- Kind 等开发环境需要显式设置 `sts.tls.auto=true`，由 Operator 管理自签 CA。服务端证书有效期为一年，并在到期前 30 天轮换，同时复用同一个十年期 CA。Operator 托管的 `sts-tls` Secret 保存 `ca.key`，使叶证书续期不会破坏现有客户端信任；复制或备份该 Secret 时，运维必须确保这个敏感私钥不会离开预期的安全边界。只有旧策略迁移或 CA 自身进入 30 天续期窗口时才会更换 CA。旧策略生成的 Operator 托管 Secret 不包含 `ca.key`，升级后会被替换一次，因此需要同步刷新客户端信任的 `ca.crt`。十年期 CA 临近到期时，应结合 CA 到期指标安排一次协调后的信任更新。当 `rbac.create=true` 时，Chart 通过命名空间级 Role 隔离写权限，全集群 Secret 和 ConfigMap 权限保持只读。当 `rbac.create=false` 时，必须为 Operator ServiceAccount 自行提供等效的 Role 和 RoleBinding：允许在 Operator namespace 内 `create` Secret，并将 `get`、`update` 限定到名为 `sts-tls` 的资源。
 - 请监控 `rustfs_operator_sts_tls_certificate_expiry_timestamp_seconds` 和 `rustfs_operator_sts_tls_ca_expiry_timestamp_seconds`。
 
 ## 6. 创建 Tenant
