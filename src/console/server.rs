@@ -19,6 +19,7 @@ use axum::http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header
 use axum::{Router, middleware, response::IntoResponse, routing::get};
 use k8s_openapi::api::core::v1 as corev1;
 use kube::{Api, Client, api::ListParams};
+use ring::rand::{SecureRandom, SystemRandom};
 use std::{
     convert::Infallible,
     future::Future,
@@ -74,7 +75,7 @@ pub async fn run(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         "Console login admission configured"
     );
 
-    let jwt_secret = load_jwt_secret();
+    let jwt_secret = load_jwt_secret()?;
 
     let state = match Client::try_default().await {
         Ok(kube_client) => {
@@ -276,13 +277,13 @@ async fn check_k8s_connectivity() -> Result<(), String> {
     Ok(())
 }
 
-fn load_jwt_secret() -> String {
+fn load_jwt_secret() -> Result<String, std::io::Error> {
     if let Some(secret) = std::env::var("JWT_SECRET")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     {
-        return secret;
+        return Ok(secret);
     }
 
     tracing::warn!(
@@ -291,31 +292,14 @@ fn load_jwt_secret() -> String {
     generate_ephemeral_jwt_secret()
 }
 
-fn generate_ephemeral_jwt_secret() -> String {
-    use sha2::Digest;
-
+fn generate_ephemeral_jwt_secret() -> Result<String, std::io::Error> {
     let mut bytes = [0u8; 32];
-    if read_urandom(&mut bytes).is_ok() {
-        return hex::encode(bytes);
-    }
-
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0)
-            .to_be_bytes(),
-    );
-    hasher.update(std::process::id().to_be_bytes());
-    hex::encode(hasher.finalize())
-}
-
-fn read_urandom(bytes: &mut [u8]) -> std::io::Result<()> {
-    use std::io::Read;
-
-    let mut file = std::fs::File::open("/dev/urandom")?;
-    file.read_exact(bytes)
+    SystemRandom::new().fill(&mut bytes).map_err(|_| {
+        std::io::Error::other(
+            "failed to obtain cryptographically secure randomness for Console session key",
+        )
+    })?;
+    Ok(hex::encode(bytes))
 }
 
 #[cfg(test)]
@@ -325,6 +309,17 @@ mod tests {
     use tower::ServiceExt;
 
     static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn ephemeral_session_keys_use_secure_randomness() -> Result<(), Box<dyn std::error::Error>> {
+        let first = generate_ephemeral_jwt_secret()?;
+        let second = generate_ephemeral_jwt_secret()?;
+
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+        Ok(())
+    }
 
     fn temp_static_dir() -> std::io::Result<PathBuf> {
         let id = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
