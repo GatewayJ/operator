@@ -363,12 +363,10 @@ mod tenant_security_context_tests {
         assert_eq!(pool["containerSecurityContext"]["type"], json!("object"));
 
         for pod in [tenant_pod, &pool["securityContext"]["properties"]] {
-            assert_eq!(pod["runAsUser"]["minimum"].as_f64(), Some(1.0));
-            for field in ["runAsGroup", "fsGroup"] {
+            for field in ["runAsUser", "runAsGroup", "fsGroup"] {
                 assert_eq!(pod[field]["minimum"].as_f64(), Some(0.0));
                 assert_eq!(pod[field]["maximum"].as_f64(), Some(i32::MAX as f64));
             }
-            assert_eq!(pod["runAsUser"]["maximum"].as_f64(), Some(i32::MAX as f64));
         }
 
         for container in [
@@ -390,16 +388,6 @@ mod tenant_security_context_tests {
             assert_eq!(
                 container["seccompProfile"]["properties"]["type"]["type"],
                 json!("string")
-            );
-        }
-
-        for container in [
-            &spec["containerSecurityContext"],
-            &pool["containerSecurityContext"],
-        ] {
-            assert_eq!(
-                container["x-kubernetes-validations"][0]["rule"],
-                json!("!has(self.runAsUser) || self.runAsUser > 0")
             );
         }
     }

@@ -522,8 +522,10 @@ spec:
 Tenant 级字段，Tenant 级字段再覆盖 Operator 默认值。Operator 默认设置
 `runAsNonRoot: true`、`RuntimeDefault` seccomp、禁止权限提升并丢弃全部 Linux
 capabilities，满足 Kubernetes Pod Security `restricted` 对应要求。显式覆盖可以
-放宽部分默认值，因此可能被集群准入策略拒绝，但 Operator 始终拒绝 UID 0。
-升级前，必须把已有 Tenant 中显式配置的 `runAsUser: 0` 调整为非零 UID。
+放宽这些默认值，因此可能被集群准入策略拒绝。为兼容存量配置，显式配置
+`runAsUser: 0` 和 `runAsNonRoot: false` 时仍允许运行，但 Operator 会输出警告；
+UID 0 场景未设置 `runAsNonRoot` 时也会推导为 `false`。建议迁移到非零 UID；
+root 工作负载不能用于 `restricted` namespace。
 
 在 OpenShift 上，应在 Pool 级使用显式空对象，把运行身份和容器安全设置交给
 namespace SCC；该契约与 MinIO Operator 保持一致：

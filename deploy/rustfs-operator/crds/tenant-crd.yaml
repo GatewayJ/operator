@@ -165,9 +165,6 @@ spec:
                         type: string
                     type: object
                 type: object
-                x-kubernetes-validations:
-                - message: containerSecurityContext.runAsUser must be greater than 0
-                  rule: '!has(self.runAsUser) || self.runAsUser > 0'
               createServiceAccountRbac:
                 description: |-
                   Deprecated compatibility field. The operator never grants Kubernetes API permissions to
@@ -1316,9 +1313,6 @@ spec:
                               type: string
                           type: object
                       type: object
-                      x-kubernetes-validations:
-                      - message: containerSecurityContext.runAsUser must be greater than 0
-                        rule: '!has(self.runAsUser) || self.runAsUser > 0'
                     name:
                       maxLength: 63
                       minLength: 1
@@ -1538,7 +1532,7 @@ spec:
                           description: UID to run the container process as.
                           format: int64
                           maximum: 2147483647.0
-                          minimum: 1.0
+                          minimum: 0.0
                           nullable: true
                           type: integer
                         seccompProfile:
@@ -1741,7 +1735,7 @@ spec:
                     description: UID to run the container process as.
                     format: int64
                     maximum: 2147483647.0
-                    minimum: 1.0
+                    minimum: 0.0
                     nullable: true
                     type: integer
                   seccompProfile:
