@@ -102,15 +102,11 @@ pub async fn run(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         // OpenAPI / Swagger (unauthenticated)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         // REST API v1
-        .nest("/api/v1", api_routes(login_admission_config))
+        .nest("/api/v1", api_routes(login_admission_config, state.clone()))
         // Shared state
         .with_state(state.clone());
     let app = with_static_frontend(app)
-        // Middleware runs in reverse order: Trace -> Compression -> Cors -> auth
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::console::middleware::auth::auth_middleware,
-        ))
+        // Middleware runs in reverse order: Trace -> Compression -> Cors
         .layer(
             CorsLayer::new()
                 .allow_origin(cors_origins)
@@ -144,15 +140,25 @@ pub async fn run(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Merge all `/api/v1` route trees.
-fn api_routes(login_admission_config: AdmissionConfig) -> Router<AppState> {
-    Router::new()
-        .merge(routes::auth_routes_with_config(login_admission_config))
+fn api_routes(login_admission_config: AdmissionConfig, state: AppState) -> Router<AppState> {
+    let protected = Router::new()
+        .merge(routes::session_routes())
         .merge(routes::tenant_routes())
         .merge(routes::pool_routes())
         .merge(routes::pod_routes())
         .merge(routes::event_routes())
         .merge(routes::cluster_routes())
         .merge(routes::topology_routes())
+        .route_layer(middleware::from_fn_with_state(
+            state,
+            crate::console::middleware::auth::auth_middleware,
+        ));
+
+    Router::new()
+        .merge(routes::public_auth_routes_with_config(
+            login_admission_config,
+        ))
+        .merge(protected)
 }
 
 fn with_static_frontend(app: Router) -> Router {
@@ -318,6 +324,29 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_ne!(first, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_router_only_exposes_explicit_public_auth_routes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let state = AppState::new("test-secret".to_string());
+        let app = api_routes(
+            AdmissionConfig::for_endpoint(AdmissionEndpoint::ConsoleLogin),
+            state.clone(),
+        )
+        .with_state(state);
+
+        let protected = app
+            .clone()
+            .oneshot(Request::get("/session").body(Body::empty())?)
+            .await?;
+        assert_eq!(protected.status(), StatusCode::UNAUTHORIZED);
+
+        let public = app
+            .oneshot(Request::post("/logout").body(Body::empty())?)
+            .await?;
+        assert_eq!(public.status(), StatusCode::OK);
         Ok(())
     }
 

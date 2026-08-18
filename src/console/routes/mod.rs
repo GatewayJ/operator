@@ -29,16 +29,22 @@ use crate::{
 
 /// Login / session routes (partially unauthenticated)
 pub fn auth_routes() -> Router<AppState> {
-    auth_routes_with_config(AdmissionConfig::for_endpoint(
+    public_auth_routes_with_config(AdmissionConfig::for_endpoint(
         AdmissionEndpoint::ConsoleLogin,
     ))
+    .merge(session_routes())
 }
 
-pub(crate) fn auth_routes_with_config(config: AdmissionConfig) -> Router<AppState> {
-    auth_routes_with_admission(AdmissionControl::new(config))
+pub(crate) fn public_auth_routes_with_config(config: AdmissionConfig) -> Router<AppState> {
+    public_auth_routes_with_admission(AdmissionControl::new(config))
 }
 
+#[cfg(test)]
 fn auth_routes_with_admission(admission: AdmissionControl) -> Router<AppState> {
+    public_auth_routes_with_admission(admission).merge(session_routes())
+}
+
+fn public_auth_routes_with_admission(admission: AdmissionControl) -> Router<AppState> {
     let login = Router::new().route(
         "/login",
         post(handlers::auth::login).route_layer(middleware::from_fn_with_state(
@@ -49,7 +55,10 @@ fn auth_routes_with_admission(admission: AdmissionControl) -> Router<AppState> {
     Router::new()
         .merge(login)
         .route("/logout", post(handlers::auth::logout))
-        .route("/session", get(handlers::auth::session_check))
+}
+
+pub(crate) fn session_routes() -> Router<AppState> {
+    Router::new().route("/session", get(handlers::auth::session_check))
 }
 
 async fn enforce_login_admission(
