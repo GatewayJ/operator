@@ -21,10 +21,10 @@ pub(crate) const MAX_KUBERNETES_ID: i64 = i32::MAX as i64;
 
 /// Resolves the effective `runAsNonRoot` value used by generated RustFS Pods.
 ///
-/// Explicit configuration always wins. Otherwise UID 0 preserves legacy root
-/// behavior, while every other UID uses the Operator's secure default.
-pub(crate) fn effective_run_as_non_root(run_as_user: Option<i64>, explicit: Option<bool>) -> bool {
-    explicit.unwrap_or(run_as_user != Some(0))
+/// Explicit configuration always wins. Otherwise the Operator keeps the secure
+/// non-root default; UID 0 is rejected separately during workload validation.
+pub(crate) fn effective_run_as_non_root(_run_as_user: Option<i64>, explicit: Option<bool>) -> bool {
+    explicit.unwrap_or(true)
 }
 
 /// Returns whether an exact Pod/container empty-object pair delegates Operator defaults.
@@ -47,7 +47,7 @@ pub(crate) fn security_context_pair_delegates_to_platform(
 #[serde(rename_all = "camelCase")]
 pub struct PodSecurityContextOverride {
     /// UID to run the container process as.
-    #[schemars(range(min = 0, max = 2147483647))]
+    #[schemars(range(min = 1, max = 2147483647))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_as_user: Option<i64>,
 
@@ -124,8 +124,8 @@ mod tests {
     }
 
     #[test]
-    fn effective_run_as_non_root_preserves_legacy_uid_zero() {
-        assert!(!effective_run_as_non_root(Some(0), None));
+    fn effective_run_as_non_root_never_implicitly_allows_uid_zero() {
+        assert!(effective_run_as_non_root(Some(0), None));
         assert!(effective_run_as_non_root(Some(10_001), None));
         assert!(effective_run_as_non_root(None, None));
     }

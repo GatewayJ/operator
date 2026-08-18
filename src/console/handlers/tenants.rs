@@ -1106,14 +1106,14 @@ metadata:
 spec:
   image: rustfs/rustfs:1.0.0-alpha.99
   securityContext:
-    runAsUser: 0
+    runAsUser: 10001
     runAsGroup: 0
     fsGroup: 0
     seccompProfile:
       type: Localhost
       localhostProfile: profiles/rustfs.json
   containerSecurityContext:
-    runAsUser: 0
+    runAsUser: 10001
     allowPrivilegeEscalation: true
     readOnlyRootFilesystem: false
     capabilities:
@@ -1124,14 +1124,14 @@ spec:
       persistence:
         volumesPerServer: 1
       securityContext:
-        runAsUser: 0
+        runAsUser: 20001
         runAsGroup: 0
         fsGroup: 0
         seccompProfile:
           type: Localhost
           localhostProfile: profiles/pool-rustfs.json
       containerSecurityContext:
-        runAsUser: 0
+        runAsUser: 20001
         allowPrivilegeEscalation: true
         capabilities:
           add: [SYS_ADMIN]
@@ -1148,7 +1148,7 @@ status:
             .security_context
             .as_ref()
             .expect("Tenant Pod security context is preserved");
-        assert_eq!(tenant_pod.run_as_user, Some(0));
+        assert_eq!(tenant_pod.run_as_user, Some(10_001));
         assert_eq!(tenant_pod.run_as_non_root, None);
         assert_eq!(
             tenant_pod
@@ -1163,7 +1163,7 @@ status:
             .container_security_context
             .as_ref()
             .expect("Tenant container security context is preserved");
-        assert_eq!(tenant_container.run_as_user, Some(0));
+        assert_eq!(tenant_container.run_as_user, Some(10_001));
         assert_eq!(tenant_container.allow_privilege_escalation, Some(true));
         assert_eq!(
             tenant_container
@@ -1178,7 +1178,7 @@ status:
             .security_context
             .as_ref()
             .expect("Pool Pod security context is preserved");
-        assert_eq!(pool_pod.run_as_user, Some(0));
+        assert_eq!(pool_pod.run_as_user, Some(20_001));
         assert_eq!(pool_pod.run_as_non_root, None);
         assert_eq!(
             pool_pod
@@ -1192,7 +1192,7 @@ status:
             .container_security_context
             .as_ref()
             .expect("Pool container security context is preserved");
-        assert_eq!(pool_container.run_as_user, Some(0));
+        assert_eq!(pool_container.run_as_user, Some(20_001));
         assert_eq!(pool_container.allow_privilege_escalation, Some(true));
         assert_eq!(
             pool_container

@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn security_context_info_keeps_raw_value_and_serializes_effective_value() {
         let context = PodSecurityContextOverride {
-            run_as_user: Some(0),
+            run_as_user: Some(10_001),
             run_as_non_root: None,
             ..Default::default()
         };
@@ -209,10 +209,10 @@ mod tests {
         let json = serde_json::to_value(&info).expect("SecurityContextInfo should serialize");
 
         assert_eq!(info.run_as_non_root, None);
-        assert_eq!(info.effective_run_as_non_root, Some(false));
+        assert_eq!(info.effective_run_as_non_root, Some(true));
         assert!(!info.operator_defaults_delegated);
         assert!(json["runAsNonRoot"].is_null());
-        assert_eq!(json["effectiveRunAsNonRoot"], serde_json::json!(false));
+        assert_eq!(json["effectiveRunAsNonRoot"], serde_json::json!(true));
         assert_eq!(json["operatorDefaultsDelegated"], serde_json::json!(false));
     }
 
