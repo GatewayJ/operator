@@ -296,13 +296,23 @@ fn validate_kubernetes_id(field_path: &str, value: Option<i64>) -> Result<(), St
     Ok(())
 }
 
+fn validate_run_as_user(field_path: &str, value: Option<i64>) -> Result<(), String> {
+    if value == Some(0) {
+        return Err(format!(
+            "{field_path} must be greater than 0; RustFS workloads cannot run as root"
+        ));
+    }
+
+    validate_kubernetes_id(field_path, value)
+}
+
 fn validate_declared_security_context_ids(
     pod_field_path: &str,
     pod: Option<&PodSecurityContextOverride>,
     container_field_path: &str,
     container: Option<&corev1::SecurityContext>,
 ) -> Result<(), String> {
-    validate_kubernetes_id(
+    validate_run_as_user(
         &format!("{pod_field_path}.runAsUser"),
         pod.and_then(|context| context.run_as_user),
     )?;
@@ -314,7 +324,7 @@ fn validate_declared_security_context_ids(
         &format!("{pod_field_path}.fsGroup"),
         pod.and_then(|context| context.fs_group),
     )?;
-    validate_kubernetes_id(
+    validate_run_as_user(
         &format!("{container_field_path}.runAsUser"),
         container.and_then(|context| context.run_as_user),
     )?;
@@ -830,16 +840,11 @@ impl Tenant {
         security: &EffectiveWorkloadSecurityContext,
     ) -> Result<(), types::error::Error> {
         let effective_run_as_user = security.container.run_as_user.or(security.pod.run_as_user);
-        let effective_run_as_non_root = security
-            .container
-            .run_as_non_root
-            .or(security.pod.run_as_non_root);
-
-        if effective_run_as_user == Some(0) && effective_run_as_non_root == Some(true) {
+        if effective_run_as_user == Some(0) {
             return Err(types::error::Error::InvalidWorkloadSecurityProfile {
                 name: self.name(),
                 message: format!(
-                    "pool '{}' resolves runAsUser to UID 0 while runAsNonRoot is explicitly true; use a non-zero UID or explicitly set the effective runAsNonRoot value to false",
+                    "pool '{}' resolves runAsUser to UID 0; RustFS workloads cannot run as root",
                     pool.name
                 ),
             });
@@ -2246,7 +2251,12 @@ mod tests {
     #[test]
     fn declared_security_context_ids_accept_kubernetes_boundaries_at_every_scope() {
         for (field_path, set_value) in declared_security_context_id_fields() {
-            for value in [0, MAX_KUBERNETES_ID] {
+            let minimum = if field_path.ends_with(".runAsUser") {
+                1
+            } else {
+                0
+            };
+            for value in [minimum, MAX_KUBERNETES_ID] {
                 let mut tenant = crate::tests::create_test_tenant(None, None);
                 set_value(&mut tenant, value);
 
@@ -3377,7 +3387,7 @@ mod tests {
             ..Default::default()
         });
         tenant.spec.pools[0].container_security_context = Some(corev1::SecurityContext {
-            run_as_user: Some(0),
+            run_as_user: Some(30_001),
             ..Default::default()
         });
 
@@ -3403,8 +3413,8 @@ mod tests {
         assert_eq!(pod_context.run_as_group, None);
         assert_eq!(pod_context.fs_group, None);
         assert_eq!(pod_context.seccomp_profile, None);
-        assert_eq!(container_context.run_as_user, Some(0));
-        assert_eq!(container_context.run_as_non_root, Some(false));
+        assert_eq!(container_context.run_as_user, Some(30_001));
+        assert_eq!(container_context.run_as_non_root, Some(true));
         assert_eq!(container_context.allow_privilege_escalation, None);
         assert_eq!(container_context.capabilities, None);
     }
@@ -3974,155 +3984,67 @@ mod tests {
     }
 
     #[test]
-    fn legacy_root_override_disables_implicit_run_as_non_root() {
-        let mut tenant = crate::tests::create_test_tenant(None, None);
-        tenant.spec.security_context = Some(PodSecurityContextOverride {
+    fn root_uid_is_rejected_at_every_override_scope() {
+        let mut cases = Vec::new();
+
+        let mut tenant_pod = crate::tests::create_test_tenant(None, None);
+        tenant_pod.spec.security_context = Some(PodSecurityContextOverride {
             run_as_user: Some(0),
             ..Default::default()
         });
-
-        let statefulset = tenant
-            .new_statefulset(&tenant.spec.pools[0])
-            .expect("Should create StatefulSet");
-        let context = statefulset
-            .spec
-            .expect("StatefulSet should have spec")
-            .template
-            .spec
-            .expect("Pod template should have spec")
-            .security_context
-            .expect("Pod should have securityContext");
-
-        assert_eq!(context.run_as_user, Some(0));
-        assert_eq!(context.run_as_non_root, Some(false));
-    }
-
-    #[test]
-    fn container_root_override_derives_non_root_false_at_tenant_and_pool_scopes() {
-        for pool_scope in [false, true] {
-            let mut tenant = crate::tests::create_test_tenant(None, None);
-            let root_context = corev1::SecurityContext {
-                run_as_user: Some(0),
-                ..Default::default()
-            };
-            if pool_scope {
-                tenant.spec.pools[0].container_security_context = Some(root_context);
-            } else {
-                tenant.spec.container_security_context = Some(root_context);
-            }
-
-            tenant
-                .validate_workload_security_compatibility()
-                .expect("implicit container runAsNonRoot should follow the container UID");
-            let statefulset = tenant
-                .new_statefulset(&tenant.spec.pools[0])
-                .expect("root container override should render consistently");
-            let pod_spec = statefulset
-                .spec
-                .expect("StatefulSet should have spec")
-                .template
-                .spec
-                .expect("Pod template should have spec");
-            let container_context = pod_spec.containers[0]
-                .security_context
-                .as_ref()
-                .expect("RustFS container should have securityContext");
-
-            assert_eq!(
-                pod_spec.security_context.unwrap().run_as_non_root,
-                Some(true)
-            );
-            assert_eq!(container_context.run_as_user, Some(0));
-            assert_eq!(container_context.run_as_non_root, Some(false));
-        }
-    }
-
-    #[test]
-    fn explicit_root_and_non_root_true_is_rejected_before_rendering() {
-        let mut cases = Vec::new();
+        cases.push((tenant_pod, "spec.securityContext.runAsUser"));
 
         let mut tenant_container = crate::tests::create_test_tenant(None, None);
         tenant_container.spec.container_security_context = Some(corev1::SecurityContext {
             run_as_user: Some(0),
-            run_as_non_root: Some(true),
+            run_as_non_root: Some(false),
             ..Default::default()
         });
-        cases.push(tenant_container);
+        cases.push((tenant_container, "spec.containerSecurityContext.runAsUser"));
+
+        let mut pool_pod = crate::tests::create_test_tenant(None, None);
+        pool_pod.spec.pools[0].security_context = Some(PodSecurityContextOverride {
+            run_as_user: Some(0),
+            ..Default::default()
+        });
+        cases.push((
+            pool_pod,
+            "spec.pools[name=pool-0].securityContext.runAsUser",
+        ));
 
         let mut pool_container = crate::tests::create_test_tenant(None, None);
         pool_container.spec.pools[0].container_security_context = Some(corev1::SecurityContext {
             run_as_user: Some(0),
-            run_as_non_root: Some(true),
             ..Default::default()
         });
-        cases.push(pool_container);
+        cases.push((
+            pool_container,
+            "spec.pools[name=pool-0].containerSecurityContext.runAsUser",
+        ));
 
-        let mut inherited_pod_true = crate::tests::create_test_tenant(None, None);
-        inherited_pod_true.spec.security_context = Some(PodSecurityContextOverride {
-            run_as_non_root: Some(true),
-            ..Default::default()
-        });
-        inherited_pod_true.spec.pools[0].container_security_context =
-            Some(corev1::SecurityContext {
-                run_as_user: Some(0),
-                ..Default::default()
-            });
-        cases.push(inherited_pod_true);
-
-        for tenant in cases {
+        for (tenant, field_path) in cases {
             let error = tenant
                 .validate_workload_security_compatibility()
-                .expect_err("UID 0 with explicit runAsNonRoot=true should be rejected");
-            assert!(matches!(
-                error,
-                crate::types::error::Error::InvalidWorkloadSecurityProfile { message, .. }
-                    if message.contains("pool-0")
-                        && message.contains("UID 0")
-                        && message.contains("explicitly true")
-            ));
+                .expect_err("UID 0 must be rejected");
+            assert!(
+                matches!(
+                    &error,
+                    crate::types::error::Error::InvalidWorkloadSecurityProfile { message, .. }
+                        if message.contains(field_path)
+                            && message.contains("greater than 0")
+                            && message.contains("cannot run as root")
+                ),
+                "unexpected validation error for {field_path}: {error:?}"
+            );
 
             let render_error = tenant
                 .new_statefulset(&tenant.spec.pools[0])
-                .expect_err("contradictory identity must fail before StatefulSet rendering");
+                .expect_err("root identity must fail before StatefulSet rendering");
             assert!(matches!(
                 render_error,
                 crate::types::error::Error::InvalidWorkloadSecurityProfile { .. }
             ));
         }
-    }
-
-    #[test]
-    fn container_non_root_uid_overrides_implicit_pod_root_identity() {
-        let mut tenant = crate::tests::create_test_tenant(None, None);
-        tenant.spec.security_context = Some(PodSecurityContextOverride {
-            run_as_user: Some(0),
-            ..Default::default()
-        });
-        tenant.spec.container_security_context = Some(corev1::SecurityContext {
-            run_as_user: Some(20_001),
-            ..Default::default()
-        });
-
-        let statefulset = tenant
-            .new_statefulset(&tenant.spec.pools[0])
-            .expect("container non-root UID should override the Pod root identity");
-        let pod_spec = statefulset
-            .spec
-            .expect("StatefulSet should have spec")
-            .template
-            .spec
-            .expect("Pod template should have spec");
-        let container_context = pod_spec.containers[0]
-            .security_context
-            .as_ref()
-            .expect("RustFS container should have securityContext");
-
-        assert_eq!(
-            pod_spec.security_context.unwrap().run_as_non_root,
-            Some(false)
-        );
-        assert_eq!(container_context.run_as_user, Some(20_001));
-        assert_eq!(container_context.run_as_non_root, Some(true));
     }
 
     #[test]
