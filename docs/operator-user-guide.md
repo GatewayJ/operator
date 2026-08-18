@@ -550,10 +550,12 @@ merged over Tenant values, which are merged over the Operator's defaults. By
 default, generated workloads set `runAsNonRoot: true`, use the
 `RuntimeDefault` seccomp profile, disable privilege escalation, and drop all
 Linux capabilities. These defaults satisfy the corresponding Kubernetes Pod
-Security `restricted` controls. Explicit overrides can relax some controls and
-may then be rejected by cluster admission policy, but UID 0 is always rejected
-by the Operator. Existing Tenants that explicitly set `runAsUser: 0` must move
-to a non-zero UID before upgrading.
+Security `restricted` controls. Explicit overrides can relax them and may then
+be rejected by cluster admission policy. For legacy compatibility, an explicit
+`runAsUser: 0` with `runAsNonRoot: false` remains supported and emits an
+Operator warning; omitting `runAsNonRoot` with UID 0 derives the same value.
+Migrate these workloads to a non-zero UID; root workloads cannot run in a
+`restricted` namespace.
 
 On OpenShift, use explicit empty objects at Pool level to delegate the runtime
 identity and container security settings to the namespace SCC, following the

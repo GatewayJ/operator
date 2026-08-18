@@ -77,7 +77,6 @@ pub struct Pool {
     /// Non-empty values merge by field over Tenant-level settings and operator defaults. An
     /// explicit empty object paired with an empty `securityContext` resets inherited values and
     /// delegates unspecified values to platform admission.
-    #[x_kube(validation = Rule::new("!has(self.runAsUser) || self.runAsUser > 0").message("containerSecurityContext.runAsUser must be greater than 0"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_security_context: Option<corev1::SecurityContext>,
 

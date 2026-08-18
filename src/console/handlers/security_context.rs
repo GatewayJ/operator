@@ -180,33 +180,33 @@ mod tests {
     use k8s_openapi::api::core::v1 as corev1;
 
     #[test]
-    fn non_root_context_reports_the_secure_effective_default() {
+    fn legacy_root_context_reports_effective_non_root_false() {
         let context = PodSecurityContextOverride {
-            run_as_user: Some(10_001),
+            run_as_user: Some(0),
             run_as_non_root: None,
             ..Default::default()
         };
 
         let info = security_context_info(Some(&context), None);
 
-        assert_eq!(info.run_as_user, Some(10_001));
+        assert_eq!(info.run_as_user, Some(0));
         assert_eq!(info.run_as_non_root, None);
-        assert_eq!(info.effective_run_as_non_root, Some(true));
+        assert_eq!(info.effective_run_as_non_root, Some(false));
         assert!(!info.operator_defaults_delegated);
     }
 
     #[test]
     fn explicit_non_root_setting_wins_in_console_response() {
         let context = PodSecurityContextOverride {
-            run_as_user: Some(10_001),
-            run_as_non_root: Some(false),
+            run_as_user: Some(0),
+            run_as_non_root: Some(true),
             ..Default::default()
         };
 
         let info = security_context_info(Some(&context), None);
 
-        assert_eq!(info.run_as_non_root, Some(false));
-        assert_eq!(info.effective_run_as_non_root, Some(false));
+        assert_eq!(info.run_as_non_root, Some(true));
+        assert_eq!(info.effective_run_as_non_root, Some(true));
         assert!(!info.operator_defaults_delegated);
     }
 
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn root_update_is_rejected_before_write() {
+    fn contradictory_root_update_is_rejected_before_write() {
         let mut tenant = crate::tests::create_test_tenant(None, None);
         let error = apply_validated_security_context_update(
             &mut tenant,
@@ -296,15 +296,36 @@ mod tests {
                 run_as_non_root: PatchField::Value(true),
             },
         )
-        .expect_err("UID 0 must not be persisted");
+        .expect_err("UID 0 with runAsNonRoot=true must not be persisted");
 
         assert!(matches!(
             error,
             Error::BadRequest { message }
-                if message.contains("runAsUser")
-                    && message.contains("greater than 0")
-                    && message.contains("cannot run as root")
+                if message.contains("UID 0") && message.contains("explicitly true")
         ));
+    }
+
+    #[test]
+    fn legacy_root_update_remains_accepted() {
+        let mut tenant = crate::tests::create_test_tenant(None, None);
+        let changed = apply_validated_security_context_update(
+            &mut tenant,
+            &UpdateSecurityContextRequest {
+                run_as_user: PatchField::Value(0),
+                run_as_group: PatchField::Missing,
+                fs_group: PatchField::Missing,
+                run_as_non_root: PatchField::Value(false),
+            },
+        )
+        .expect("legacy root identity should remain compatible");
+
+        assert!(changed);
+        let context = tenant
+            .spec
+            .security_context
+            .expect("security context should be persisted");
+        assert_eq!(context.run_as_user, Some(0));
+        assert_eq!(context.run_as_non_root, Some(false));
     }
 
     #[test]

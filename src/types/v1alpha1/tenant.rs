@@ -243,7 +243,6 @@ pub struct TenantSpec {
     /// Non-empty values merge by field over operator defaults, with Pool-level values taking
     /// precedence. Setting this and `securityContext` to explicit empty objects resets the
     /// defaults and delegates unspecified values to platform admission.
-    #[x_kube(validation = Rule::new("!has(self.runAsUser) || self.runAsUser > 0").message("containerSecurityContext.runAsUser must be greater than 0"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_security_context: Option<corev1::SecurityContext>,
 }
