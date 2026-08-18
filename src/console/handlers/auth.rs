@@ -342,11 +342,16 @@ mod tests {
         let state = AppState::new("test-secret".to_string());
         let session_id = state.create_session("k8s-token".to_string())?;
         let cookie = format!("session={session_id}");
+        let protected = Router::new()
+            .route("/api/v1/protected", get(|| async { "ok" }))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
         let app = Router::new()
             .route("/api/v1/logout", post(logout))
-            .route("/api/v1/protected", get(|| async { "ok" }))
-            .with_state(state.clone())
-            .layer(middleware::from_fn_with_state(state, auth_middleware));
+            .merge(protected)
+            .with_state(state);
 
         let logout_response = app
             .clone()
