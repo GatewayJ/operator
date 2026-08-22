@@ -29,10 +29,10 @@ pub async fn auth_middleware(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
-) -> Result<Response, Response> {
+) -> Response {
     // Allow CORS preflight without 401 (browser would treat as CORS failure)
     if request.method() == Method::OPTIONS {
-        return Ok(next.run(request).await);
+        return next.run(request).await;
     }
     // Parse session cookie
     let cookies = request
@@ -41,18 +41,20 @@ pub async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let token = session_cookie_value(cookies)
-        .ok_or_else(|| unauthorized_response("Missing or invalid session"))?;
+    let Some(token) = session_cookie_value(cookies) else {
+        return unauthorized_response("Missing or invalid session");
+    };
 
-    let claims = state
-        .resolve_session(token)
-        .map_err(|source| Error::Session { source }.into_response())?
-        .ok_or_else(|| unauthorized_response("Missing or invalid session"))?;
+    let claims = match state.resolve_session(token) {
+        Ok(Some(claims)) => claims,
+        Ok(None) => return unauthorized_response("Missing or invalid session"),
+        Err(source) => return Error::Session { source }.into_response(),
+    };
 
     // Stash claims for handlers
     request.extensions_mut().insert(claims);
 
-    Ok(next.run(request).await)
+    next.run(request).await
 }
 
 fn unauthorized_response(message: &str) -> Response {
