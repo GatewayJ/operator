@@ -60,7 +60,7 @@ spec:
       {{- end }}
       containers:
         - name: console
-          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Values.operator.image.tag }}"
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Values.operator.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
           command: ["./operator", "console", "--port", "{{ .Values.console.port }}"]
           env:

@@ -99,6 +99,9 @@ jobs:
         with:
           version: 3.21.3
 
+      - name: Check release metadata
+        run: make release-metadata-check
+
       - name: Run tests
         run: |
           cargo nextest run --all --no-tests pass

@@ -283,7 +283,7 @@ operator:
   replicas: 2
   image:
     repository: registry.example.com/rustfs/operator
-    tag: v0.1.0
+    tag: 0.0.6
   resources:
     requests:
       cpu: 200m

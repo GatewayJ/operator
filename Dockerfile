@@ -1,8 +1,11 @@
 # Base image for final stage (override with: docker build --build-arg BASE_IMAGE=...)
 ARG BASE_IMAGE=debian:bookworm-slim
 
-# Use rust:bookworm so the binary is linked against glibc 2.36, matching final image.
+# Use the latest stable Rust on bookworm so release binaries match CI and glibc 2.36.
 ARG RUST_BUILD_IMAGE=rust:bookworm
+
+# Operator version embedded in release binaries. Local builds fall back to Cargo.toml.
+ARG VERSION
 
 # Build image for the static Console frontend.
 ARG NODE_BUILD_IMAGE=node:24-alpine
@@ -49,6 +52,8 @@ RUN cargo chef cook --release --recipe-path recipe.json
 
 # Stage 3: Build the binary
 FROM rust-base AS builder
+ARG VERSION
+ENV RUSTFS_OPERATOR_VERSION=${VERSION}
 WORKDIR /app
 COPY . .
 COPY --from=cacher /app/target target

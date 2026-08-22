@@ -19,7 +19,8 @@ operator:
 
   image:
     repository: rustfs/operator
-    tag: latest
+    # Defaults to Chart.appVersion so a released chart never selects a mutable image tag.
+    tag: ""
     pullPolicy: IfNotPresent
 
   # Image pull secrets for private registries

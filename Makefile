@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: pre-commit fmt fmt-check clippy test build help
+.PHONY: pre-commit release-metadata-check fmt fmt-check clippy test build help
 .PHONY: docker-build-operator docker-build-console-web docker-build-all
 .PHONY: console-lint console-build console-fmt console-fmt-check
 .PHONY: e2e-check e2e-live-create .e2e-live-install-cert-manager e2e-live-run e2e-live-update e2e-live-delete
@@ -28,6 +28,7 @@ help:
 	@echo ""
 	@echo "Usage:"
 	@echo "  make pre-commit        - Run the full local gate (Rust + frontend), matching CI"
+	@echo "  make release-metadata-check - Verify release and Rust versions stay aligned"
 	@echo "  make fmt              - Format Rust code"
 	@echo "  make fmt-check        - Check Rust formatting without modifying files"
 	@echo "  make clippy           - Run clippy checks"
@@ -47,8 +48,12 @@ help:
 	@echo "  make e2e-live-delete  - Delete live Kind environment and clean dedicated storage"
 
 # pre-commit checks: Rust main crate + e2e harness + frontend (lint + build + format checks)
-pre-commit: fmt-check clippy test e2e-check console-lint console-build console-fmt-check
+pre-commit: release-metadata-check fmt-check clippy test e2e-check console-lint console-build console-fmt-check
 	@echo "pre-commit: all checks passed"
+
+# Keep source, chart, CI, and container release metadata aligned.
+release-metadata-check:
+	bash scripts/check-release-metadata.sh
 
 # Format Rust code.
 fmt:

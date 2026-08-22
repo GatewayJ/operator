@@ -85,7 +85,8 @@ jobs:
           set -eux
           helm package ./deploy/rustfs-operator \
             --destination deploy/rustfs-operator/ \
-            --version "${{ steps.version.outputs.chart_version }}"
+            --version "${{ steps.version.outputs.chart_version }}" \
+            --app-version "${{ steps.version.outputs.chart_version }}"
 
       - name: Upload helm package as artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
