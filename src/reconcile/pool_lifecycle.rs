@@ -224,7 +224,7 @@ async fn reconcile_single_pool_lifecycle(
         .await
         {
             Ok(status) => status,
-            Err(decision) => return decision,
+            Err(decision) => return *decision,
         };
 
         return cleanup_decommissioned_pool(ctx, tenant, namespace, pool, status).await;
@@ -570,69 +570,69 @@ async fn verify_decommissioned_pool_for_cleanup(
     pool: &Pool,
     existing: &PoolDecommissionStatus,
     cluster_domain: &str,
-) -> Result<PoolDecommissionStatus, PoolLifecycleDecision> {
+) -> Result<PoolDecommissionStatus, Box<PoolLifecycleDecision>> {
     let matched_pool = match find_rustfs_pool(client, tenant, namespace, pool, cluster_domain).await
     {
         Ok(matched_pool) => matched_pool,
         Err(error) if error.is_retriable() => {
-            return Err(cleanup_retriable_decision(
+            return Err(Box::new(cleanup_retriable_decision(
                 existing.clone(),
                 error.reason(),
                 error.message(),
-            ));
+            )));
         }
         Err(error) => {
-            return Err(failed_decision(
+            return Err(Box::new(failed_decision(
                 existing.request_id.clone(),
                 error.reason(),
                 error.message(),
-            ));
+            )));
         }
     };
     let pool_id = matched_pool.item.id.to_string();
 
     let Some(existing_pool_id) = existing.rustfs_pool_id.as_deref() else {
-        return Err(failed_decision(
+        return Err(Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsPoolIdentityMissing",
             "recorded decommission status is missing rustfsPoolID; refusing cleanup",
-        ));
+        )));
     };
     if existing_pool_id != pool_id {
         let message = format!(
             "recorded RustFS pool id '{}' no longer matches observed pool id '{}'",
             existing_pool_id, pool_id
         );
-        return Err(failed_decision(
+        return Err(Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsPoolIdentityMismatch",
             &message,
-        ));
+        )));
     }
 
     let Some(existing_hash) = existing.endpoint_set_hash.as_deref() else {
-        return Err(failed_decision(
+        return Err(Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsPoolIdentityMissing",
             "recorded decommission status is missing endpointSetHash; refusing cleanup",
-        ));
+        )));
     };
     if existing_hash != matched_pool.expected_endpoint_set_hash {
-        return Err(failed_decision(
+        return Err(Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsPoolIdentityMismatch",
             "recorded endpoint set hash no longer matches the expected pool cmdline",
-        ));
+        )));
     }
 
     let rustfs_status = match client.pool_status_by_id(&pool_id).await {
         Ok(status) => status,
         Err(error) => {
-            return Err(cleanup_retriable_decision(
+            return Err(Box::new(cleanup_retriable_decision(
                 existing.clone(),
                 "RustfsDecommissionStatusFailed",
                 &error.to_string(),
-            ));
+            )));
         }
     };
 
@@ -656,19 +656,19 @@ async fn verify_decommissioned_pool_for_cleanup(
         &matched_pool.expected_endpoint_set_hash,
     )
     .map_err(|message| {
-        failed_decision(
+        Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsPoolIdentityMismatch",
             &message,
-        )
+        ))
     })?;
 
     if !matches!(status.phase, Some(PoolDecommissionPhase::Complete)) {
-        return Err(failed_decision(
+        return Err(Box::new(failed_decision(
             existing.request_id.clone(),
             "RustfsDecommissionNotComplete",
             "RustFS no longer reports the pool decommission as complete; refusing cleanup",
-        ));
+        )));
     }
 
     Ok(status)
