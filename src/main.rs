@@ -20,10 +20,16 @@ shadow_rs::shadow!(build);
 
 const SERVICE_ACCOUNT_NAMESPACE_PATH: &str =
     "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
+const RELEASE_VERSION: &str = match option_env!("RUSTFS_OPERATOR_VERSION") {
+    Some(version) => version,
+    None => "",
+};
 
 #[allow(clippy::const_is_empty)]
 const SHORT_VERSION: &str = {
-    if !build::TAG.is_empty() {
+    if !RELEASE_VERSION.is_empty() {
+        RELEASE_VERSION
+    } else if !build::TAG.is_empty() {
         build::TAG
     } else if !build::SHORT_COMMIT.is_empty() {
         concat!("@", build::SHORT_COMMIT)

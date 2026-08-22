@@ -95,7 +95,7 @@ The following table lists the configurable parameters of the RustFS Operator cha
 |-----------|-------------|---------|
 | `operator.replicas` | Number of operator replicas | `1` |
 | `operator.image.repository` | Operator image repository | `rustfs/operator` |
-| `operator.image.tag` | Operator image tag | `latest` |
+| `operator.image.tag` | Operator image tag; empty uses `Chart.appVersion` | `""` |
 | `operator.image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `operator.imagePullSecrets` | Image pull secrets | `[]` |
 | `operator.leaderElect` | Enable leader election override (`null`/unset for auto by replicas) | `null` |
@@ -248,7 +248,7 @@ The generated ClusterRole grants only `get`, `list`, and `watch` for Secrets and
 ```bash
 helm install rustfs-operator deploy/rustfs-operator/ \
   --set operator.image.repository=myregistry/operator \
-  --set operator.image.tag=v0.2.0
+  --set operator.image.tag=0.0.6
 ```
 
 ### Increased Resources

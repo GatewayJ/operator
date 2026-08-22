@@ -562,5 +562,5 @@ spec:
 
 ---
 
-**Version**: v0.1.0
-**Last Updated**: 2025-11-05
+**Version**: v0.0.6
+**Last Updated**: 2026-08-22
