@@ -21,7 +21,7 @@ Applies to `.github/` and repository pull-request operations.
 
 When changing CI-sensitive behavior, keep local validation aligned with [`Makefile`](Makefile) at the repo root.
 
-**Local bar before push (authoritative for contributors):** `make pre-commit` — runs Rust `fmt-check`, `clippy`, `test`, plus `console-web` lint, build, and Prettier check (see `Makefile`).
+**Local bar before push (authoritative for contributors):** `make pre-commit` — runs Rust `fmt-check`, `clippy`, `test`, plus `console-web` tests, lint, build, and Prettier check (see `Makefile`).
 
 **CI workflow** [`.github/workflows/ci.yml`](workflows/ci.yml) `test-and-lint` job currently runs:
 
@@ -29,6 +29,6 @@ When changing CI-sensitive behavior, keep local validation aligned with [`Makefi
 - `cargo fmt --all --check`
 - `cargo clippy --all-features -- -D warnings`
 - `make e2e-check`
-- `console-web` dependency install, lint, build, and format check
+- `console-web` dependency install, tests, lint, build, and format check
 
 Still run **`make pre-commit` locally** before opening a PR so frontend changes are validated before CI.

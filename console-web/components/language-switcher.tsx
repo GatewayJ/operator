@@ -23,7 +23,7 @@ export function LanguageSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={currentLanguage.text}>
+        <Button variant="ghost" size="icon-sm" className="size-11 sm:size-7" aria-label={currentLanguage.text}>
           <RiTranslate2 className="size-4 shrink-0" />
         </Button>
       </DropdownMenuTrigger>

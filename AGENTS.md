@@ -35,7 +35,8 @@ Run and pass:
 make pre-commit
 ```
 
-This runs: `fmt-check` → `clippy` → `test` → `console-lint` → `console-fmt-check`.
+This runs release metadata, Rust formatting/lints/tests, the e2e harness, and
+frontend tests/lint/build/format checks.
 
 Do not commit when required checks fail.
 

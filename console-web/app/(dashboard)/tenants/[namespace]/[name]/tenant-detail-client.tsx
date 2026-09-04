@@ -650,7 +650,7 @@ export function TenantDetailClient({ namespace, name, initialTab, initialYamlEdi
       </PageHeader>
 
       {statusNoticeVisible && (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium">{t("Status reason")}:</span>
             <span>{statusReason}</span>
@@ -671,13 +671,13 @@ export function TenantDetailClient({ namespace, name, initialTab, initialYamlEdi
         </div>
       )}
 
-      <div className="flex gap-2 border-b border-border mb-4">
+      <div className="flex gap-2 overflow-x-auto border-b border-border">
         {tabs.map(({ id, labelKey }) => (
           <button
             key={id}
             type="button"
             onClick={() => setTab(id)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
               tab === id
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground"
