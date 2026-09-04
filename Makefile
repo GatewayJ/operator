@@ -14,7 +14,7 @@
 
 .PHONY: pre-commit release-metadata-check fmt fmt-check clippy test build help
 .PHONY: docker-build-operator docker-build-console-web docker-build-all
-.PHONY: console-lint console-build console-fmt console-fmt-check
+.PHONY: console-test console-lint console-build console-fmt console-fmt-check
 .PHONY: e2e-check e2e-live-create .e2e-live-install-cert-manager e2e-live-run e2e-live-update e2e-live-delete
 
 # Default target
@@ -37,6 +37,7 @@ help:
 	@echo "  make docker-build-operator  - Build the unified operator + console image (IMAGE_REPO?=rustfs/operator IMAGE_TAG?=dev)"
 	@echo "  make docker-build-console-web - Build the legacy split console-web image (CONSOLE_WEB_IMAGE_REPO?=rustfs/console-web CONSOLE_WEB_IMAGE_TAG?=dev)"
 	@echo "  make docker-build-all       - Build both unified operator and legacy console-web images"
+	@echo "  make console-test     - Run frontend unit and interaction tests (console-web)"
 	@echo "  make console-lint     - Run frontend ESLint checks (console-web)"
 	@echo "  make console-build    - Build frontend static assets (console-web)"
 	@echo "  make console-fmt     - Format frontend code with Prettier (console-web)"
@@ -47,8 +48,8 @@ help:
 	@echo "  make e2e-live-update  - Rebuild image and update the live environment (load + rollout)"
 	@echo "  make e2e-live-delete  - Delete live Kind environment and clean dedicated storage"
 
-# pre-commit checks: Rust main crate + e2e harness + frontend (lint + build + format checks)
-pre-commit: release-metadata-check fmt-check clippy test e2e-check console-lint console-build console-fmt-check
+# pre-commit checks: Rust main crate + e2e harness + frontend (test + lint + build + format checks)
+pre-commit: release-metadata-check fmt-check clippy test e2e-check console-test console-lint console-build console-fmt-check
 	@echo "pre-commit: all checks passed"
 
 # Keep source, chart, CI, and container release metadata aligned.
@@ -70,6 +71,10 @@ clippy:
 # Run Rust tests.
 test:
 	cargo test --all
+
+# Run frontend tests. Run pnpm install in console-web first.
+console-test:
+	cd console-web && pnpm run test
 
 # Run frontend ESLint checks. Run pnpm install in console-web first.
 console-lint:

@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { RiAddLine, RiArrowDownSLine, RiFolderLine, RiHardDrive2Line, RiNodeTree, RiServerLine } from "@remixicon/react"
 import { Page } from "@/components/page"
-import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,82 +14,24 @@ import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import * as api from "@/lib/api"
 import { ApiError } from "@/lib/api-client"
+import { routes } from "@/lib/routes"
+import { getStatusDotClass, STATUS_THEME } from "@/lib/status-theme"
 import { normalizeTopologyTenantState } from "@/lib/tenant-state"
 import { cn, formatBinaryBytes, formatK8sMemory } from "@/lib/utils"
 import type { ClusterResourcesResponse, NamespaceItem, NodeInfo } from "@/types/api"
-import type { TopologyOverviewResponse, TopologyTenantState } from "@/types/topology"
+import type { TopologyOverviewResponse } from "@/types/topology"
 
 type ClusterTab = "nodes" | "resources" | "namespaces"
 
-const STATE_THEME: Record<
-  TopologyTenantState,
-  {
-    badge: string
-    dot: string
-    card: string
-  }
-> = {
-  Ready: {
-    badge: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    dot: "bg-emerald-500",
-    card: "border-emerald-200 bg-emerald-50/60",
-  },
-  Reconciling: {
-    badge: "border-blue-200 bg-blue-50 text-blue-700",
-    dot: "bg-blue-500",
-    card: "border-blue-200 bg-blue-50/60",
-  },
-  Blocked: {
-    badge: "border-purple-200 bg-purple-50 text-purple-700",
-    dot: "bg-purple-500",
-    card: "border-purple-200 bg-purple-50/60",
-  },
-  Updating: {
-    badge: "border-blue-200 bg-blue-50 text-blue-700",
-    dot: "bg-blue-500",
-    card: "border-blue-200 bg-blue-50/60",
-  },
-  Degraded: {
-    badge: "border-amber-200 bg-amber-50 text-amber-700",
-    dot: "bg-amber-500",
-    card: "border-amber-200 bg-amber-50/60",
-  },
-  NotReady: {
-    badge: "border-red-200 bg-red-50 text-red-700",
-    dot: "bg-red-500",
-    card: "border-red-200 bg-red-50/60",
-  },
-  Unknown: {
-    badge: "border-zinc-200 bg-zinc-100 text-zinc-700",
-    dot: "bg-zinc-500",
-    card: "border-zinc-200 bg-zinc-100/80",
-  },
+function normalizeClusterTab(value: string | null): ClusterTab {
+  return value === "resources" || value === "namespaces" ? value : "nodes"
 }
 
-function getTreeDotClass(state: string): string {
-  switch (state) {
-    case "Ready":
-    case "Running":
-      return "bg-emerald-500"
-    case "Reconciling":
-    case "Updating":
-      return "bg-blue-500"
-    case "Blocked":
-      return "bg-purple-500"
-    case "Degraded":
-    case "Pending":
-      return "bg-amber-500"
-    case "NotReady":
-    case "Failed":
-      return "bg-red-500"
-    default:
-      return "bg-zinc-400"
-  }
-}
-
-export default function DashboardPage() {
+function DashboardPageContent() {
   const { t } = useTranslation()
-  const [tab, setTab] = useState<ClusterTab>("nodes")
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tab = normalizeClusterTab(searchParams.get("tab"))
   const [nodes, setNodes] = useState<NodeInfo[]>([])
   const [namespaces, setNamespaces] = useState<NamespaceItem[]>([])
   const [resources, setResources] = useState<ClusterResourcesResponse | null>(null)
@@ -134,6 +76,15 @@ export default function DashboardPage() {
   useEffect(() => {
     load()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- run once on mount
+
+  const handleTabChange = (nextTab: ClusterTab) => {
+    const nextSearchParams = new URLSearchParams(searchParams.toString())
+    if (nextTab === "nodes") nextSearchParams.delete("tab")
+    else nextSearchParams.set("tab", nextTab)
+
+    const query = nextSearchParams.toString()
+    router.replace(`${routes.dashboard}${query ? `?${query}` : ""}#cluster`, { scroll: false })
+  }
 
   const handleCreateNamespace = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -182,9 +133,7 @@ export default function DashboardPage() {
 
   return (
     <Page>
-      <PageHeader>
-        <h1 className="text-base font-medium">{t("Dashboard")}</h1>
-      </PageHeader>
+      <h1 className="sr-only">{t("Dashboard")}</h1>
 
       <div className="grid gap-4">
         <Card className="transition-shadow hover:shadow-md">
@@ -193,9 +142,6 @@ export default function DashboardPage() {
               <RiServerLine className="size-5" />
               <CardTitle className="text-base">{t("Tenants")}</CardTitle>
             </div>
-            <CardDescription className="text-sm">
-              {t("Manage RustFS tenants: create, view, edit pools and pods.")}
-            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-md border border-border bg-background px-3 py-3">
@@ -213,7 +159,7 @@ export default function DashboardPage() {
               <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">{t("Pods")}</p>
               <div className="mt-2 flex items-baseline gap-2">
                 <span className="text-2xl font-semibold">{podTotal}</span>
-                <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                <span className="text-status-success text-sm font-medium">
                   {podRunning} {t("running")}
                 </span>
               </div>
@@ -282,9 +228,9 @@ export default function DashboardPage() {
                                       className="vtree-vbox vtree-vbox--tenant"
                                       onClick={() => toggleTreeNode(tenantId)}
                                     >
-                                      <span className={cn("vtree-vdot", getTreeDotClass(tenantState))} />
+                                      <span className={cn("vtree-vdot", getStatusDotClass(tenantState))} />
                                       <span className="vtree-vbox-name">{tenant.name}</span>
-                                      <span className={cn("vtree-vstate", STATE_THEME[tenantState].badge)}>
+                                      <span className={cn("vtree-vstate", STATUS_THEME[tenantState].badge)}>
                                         {t(tenantState)}
                                       </span>
                                       <RiArrowDownSLine
@@ -339,10 +285,10 @@ export default function DashboardPage() {
                                                             className={cn(
                                                               "vtree-vtile-tip-val",
                                                               pod.phase === "Running"
-                                                                ? "text-emerald-600 dark:text-emerald-400"
+                                                                ? "text-status-success"
                                                                 : pod.phase === "Pending"
-                                                                  ? "text-amber-600 dark:text-amber-400"
-                                                                  : "text-red-600 dark:text-red-400",
+                                                                  ? "text-status-warning"
+                                                                  : "text-status-danger",
                                                             )}
                                                           >
                                                             {pod.phase}
@@ -393,7 +339,8 @@ export default function DashboardPage() {
                 <button
                   key={id}
                   type="button"
-                  onClick={() => setTab(id)}
+                  aria-pressed={tab === id}
+                  onClick={() => handleTabChange(id)}
                   className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
                     tab === id
                       ? "border-primary text-primary"
@@ -561,5 +508,21 @@ export default function DashboardPage() {
         </Card>
       </section>
     </Page>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <Page>
+          <div className="flex items-center justify-center py-12">
+            <Spinner className="size-8" />
+          </div>
+        </Page>
+      }
+    >
+      <DashboardPageContent />
+    </Suspense>
   )
 }

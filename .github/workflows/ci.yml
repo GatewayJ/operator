@@ -135,6 +135,7 @@ jobs:
       - name: Check console frontend
         working-directory: console-web
         run: |
+          pnpm run test
           pnpm run lint
           pnpm run build
           pnpm run format:check

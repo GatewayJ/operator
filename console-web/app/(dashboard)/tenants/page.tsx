@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import {
   RiAddLine,
+  RiArrowDownSLine,
   RiDeleteBinLine,
   RiExternalLinkLine,
   RiEyeLine,
@@ -16,12 +17,13 @@ import {
   RiSearchLine,
 } from "@remixicon/react"
 import { Page } from "@/components/page"
-import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -31,6 +33,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import * as api from "@/lib/api"
 import { ApiError } from "@/lib/api-client"
 import { routes } from "@/lib/routes"
+import { STATUS_THEME } from "@/lib/status-theme"
 import { normalizeTenantLifecycleState } from "@/lib/tenant-state"
 import { parseSizeToBytes, formatBinaryBytes } from "@/lib/utils"
 import type { ServiceInfo, TenantLifecycleState, TenantListItem, TenantStateCountsResponse } from "@/types/api"
@@ -45,59 +48,6 @@ const EMPTY_STATE_COUNTS: Record<TenantLifecycleState, number> = {
   Degraded: 0,
   NotReady: 0,
   Unknown: 0,
-}
-
-const STATE_THEME: Record<
-  TenantLifecycleState,
-  {
-    badge: string
-    dot: string
-    label: string
-    activeCard: string
-  }
-> = {
-  Ready: {
-    badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    dot: "bg-emerald-500",
-    label: "text-emerald-700",
-    activeCard: "border-emerald-300 ring-1 ring-emerald-200",
-  },
-  Reconciling: {
-    badge: "bg-blue-50 text-blue-700 border-blue-200",
-    dot: "bg-blue-500",
-    label: "text-blue-700",
-    activeCard: "border-blue-300 ring-1 ring-blue-200",
-  },
-  Blocked: {
-    badge: "bg-purple-50 text-purple-700 border-purple-200",
-    dot: "bg-purple-500",
-    label: "text-purple-700",
-    activeCard: "border-purple-300 ring-1 ring-purple-200",
-  },
-  Updating: {
-    badge: "bg-blue-50 text-blue-700 border-blue-200",
-    dot: "bg-blue-500",
-    label: "text-blue-700",
-    activeCard: "border-blue-300 ring-1 ring-blue-200",
-  },
-  Degraded: {
-    badge: "bg-amber-50 text-amber-700 border-amber-200",
-    dot: "bg-amber-500",
-    label: "text-amber-700",
-    activeCard: "border-amber-300 ring-1 ring-amber-200",
-  },
-  NotReady: {
-    badge: "bg-red-50 text-red-700 border-red-200",
-    dot: "bg-red-500",
-    label: "text-red-700",
-    activeCard: "border-red-300 ring-1 ring-red-200",
-  },
-  Unknown: {
-    badge: "bg-zinc-100 text-zinc-700 border-zinc-200",
-    dot: "bg-zinc-500",
-    label: "text-zinc-700",
-    activeCard: "border-zinc-300 ring-1 ring-zinc-200",
-  },
 }
 
 interface TenantMeta {
@@ -382,33 +332,21 @@ export default function TenantsListPage() {
 
   return (
     <Page>
-      <PageHeader
-        actions={
-          <Button asChild size="sm">
-            <Link href={routes.tenantNew} prefetch={false}>
-              <RiAddLine className="mr-1 size-4" />
-              {t("Create Tenant")}
-            </Link>
-          </Button>
-        }
-      >
-        <h1 className="text-lg font-semibold">{t("Tenants")}</h1>
-        <p className="text-sm text-muted-foreground">{t("Manage RustFS tenant instances.")}</p>
-      </PageHeader>
+      <h1 className="sr-only">{t("Tenants")}</h1>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
         <button
           type="button"
           onClick={() => setSelectedState(null)}
           className={`rounded-md border bg-background px-3 py-3 text-left transition ${
             selectedState === null
-              ? "border-slate-300 ring-1 ring-slate-200"
+              ? "border-muted-foreground/40 ring-1 ring-muted-foreground/20"
               : "border-border hover:border-muted-foreground/40"
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-700">{t("Total")}</span>
-            <span className="size-2 rounded-full bg-slate-500" />
+            <span className="text-xs font-medium text-muted-foreground">{t("Total")}</span>
+            <span className="size-2 rounded-full bg-muted-foreground" />
           </div>
           <p className="mt-2 text-3xl leading-none font-semibold">{totalCount}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
@@ -416,7 +354,7 @@ export default function TenantsListPage() {
           </p>
         </button>
         {TENANT_STATES.map((state) => {
-          const theme = STATE_THEME[state]
+          const theme = STATUS_THEME[state]
           const active = selectedState === state
           return (
             <button
@@ -438,7 +376,7 @@ export default function TenantsListPage() {
         })}
       </div>
 
-      <div className="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <RiSearchLine className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -448,28 +386,48 @@ export default function TenantsListPage() {
             className="pl-8"
           />
         </div>
-        <select
-          value={selectedNamespace}
-          onChange={(e) => setSelectedNamespace(e.target.value)}
-          className="dark:bg-input/30 border-input h-8 min-w-[220px] rounded-none border bg-transparent px-2.5 text-xs outline-none"
-        >
-          <option value={ALL_NAMESPACES}>{t("All Namespaces")}</option>
-          {namespaceOptions.map((namespace) => (
-            <option key={namespace} value={namespace}>
-              {namespace}
-            </option>
-          ))}
-        </select>
-        {selectedState && (
-          <Button type="button" variant="outline" size="sm" onClick={() => setSelectedState(null)}>
-            {t("All States")}
+        <div className="flex flex-wrap gap-2 lg:flex-nowrap">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-11 min-w-[220px] flex-1 justify-between sm:min-h-0 lg:flex-none"
+              >
+                <span className="truncate">
+                  {selectedNamespace === ALL_NAMESPACES ? t("All Namespaces") : selectedNamespace}
+                </span>
+                <RiArrowDownSLine className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[220px]">
+              <DropdownMenuRadioGroup value={selectedNamespace} onValueChange={setSelectedNamespace}>
+                <DropdownMenuRadioItem value={ALL_NAMESPACES}>{t("All Namespaces")}</DropdownMenuRadioItem>
+                {namespaceOptions.map((namespace) => (
+                  <DropdownMenuRadioItem key={namespace} value={namespace}>
+                    {namespace}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => router.push(`${routes.dashboard}?tab=namespaces#cluster`)}>
+                {t("Manage Namespaces")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {selectedState && (
+            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedState(null)}>
+              {t("All States")}
+            </Button>
+          )}
+          <Button asChild size="sm" className="min-h-11 shrink-0 sm:min-h-0">
+            <Link href={routes.tenantNew} prefetch={false}>
+              <RiAddLine className="mr-1 size-4" />
+              {t("Create Tenant")}
+            </Link>
           </Button>
-        )}
-        <Button asChild variant="outline" size="sm">
-          <Link href={`${routes.dashboard}#cluster`} prefetch={false}>
-            {t("Manage Namespaces")}
-          </Link>
-        </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -477,7 +435,7 @@ export default function TenantsListPage() {
           <Spinner className="size-8" />
         </div>
       ) : filteredTenants.length === 0 ? (
-        <div className="mt-4 rounded-lg border border-dashed border-border py-12 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border py-12 text-center text-sm text-muted-foreground">
           {searchText || selectedState
             ? t("No tenants match the current filters.")
             : t("No tenants yet. Create one to get started.")}
@@ -490,7 +448,7 @@ export default function TenantsListPage() {
           </div>
         </div>
       ) : (
-        <div className="mt-4 rounded-md border border-border">
+        <div className="rounded-md border border-border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -524,7 +482,7 @@ export default function TenantsListPage() {
                     <TableCell>{tenant.namespace}</TableCell>
                     <TableCell>
                       <span
-                        className={`inline-flex rounded border px-2 py-0.5 text-xs ${STATE_THEME[normalizedState].badge}`}
+                        className={`inline-flex rounded border px-2 py-0.5 text-xs ${STATUS_THEME[normalizedState].badge}`}
                       >
                         {t(normalizedState)}
                       </span>

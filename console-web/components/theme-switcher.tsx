@@ -27,7 +27,7 @@ export function ThemeSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={t("Light")}>
+        <Button variant="ghost" size="icon-sm" className="size-11 sm:size-7" aria-label={t("Light")}>
           <Icon className="size-4 shrink-0" />
         </Button>
       </DropdownMenuTrigger>
