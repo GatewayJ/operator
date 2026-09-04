@@ -38,6 +38,8 @@ All notable changes to RustFS Operator are documented in this file. The format i
 
 - Documented that distinct-physical-disk erasure failures and a separate data-plane operator are
   outside this controller's scope.
+- Refreshed the Console dashboard and tenant navigation with semantic status colors, clearer primary
+  actions, and responsive sidebar behavior.
 
 ## [0.0.6] - 2026-08-22
 
