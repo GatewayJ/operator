@@ -21,7 +21,7 @@ RustFS **S3 API** and **RustFS Console UI** inside a Tenant are exposed on **900
 
 - **Rust** — Toolchain from [`rust-toolchain.toml`](rust-toolchain.toml) (stable; edition 2024).
 - **Kubernetes** — Target API **v1.30** (see `Cargo.toml` / `k8s-openapi` features); a reachable cluster for `server` mode.
-- **console-web** (optional) — **Node.js ≥ 20** and `pnpm install` in `console-web/` if you run frontend lint/format or UI dev.
+- **console-web** (optional) — **Node.js ≥ 20.19** and `pnpm install` in `console-web/` if you run frontend lint/format or UI dev.
 
 ## Quick start
 
